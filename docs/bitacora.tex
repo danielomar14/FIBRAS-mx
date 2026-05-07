@@ -1,0 +1,331 @@
+\documentclass[12pt, a4paper]{article}
+
+% Paquetes
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[spanish, mexico]{babel}
+\usepackage{geometry}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{fancyhdr}
+\usepackage{titlesec}
+\usepackage{datetime2}
+\usepackage{parskip}
+\usepackage{listings}
+\usepackage{lmodern}
+
+\geometry{margin=2.5cm}
+
+% Colores del proyecto
+\definecolor{fibra-blue}{RGB}{0, 82, 155}
+\definecolor{fibra-green}{RGB}{0, 128, 64}
+\definecolor{fibra-gray}{RGB}{100, 100, 100}
+
+% Estilo de encabezados
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\textcolor{fibra-gray}{\small Bit\'{a}cora de Proyecto}}
+\fancyhead[R]{\textcolor{fibra-gray}{\small FIBRAs Mexicanas}}
+\fancyfoot[C]{\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+
+% Formato de secciones de sesi\'{o}n
+\titleformat{\section}{\large\bfseries\color{fibra-blue}}{}{0em}{}[\titlerule]
+\titleformat{\subsection}{\normalsize\bfseries\color{fibra-green}}{}{0em}{}
+
+% Comando para nueva sesi\'{o}n
+\newcommand{\sesion}[2]{%
+  \section{Sesi\'{o}n del #1}%
+  \textit{#2}%
+  \vspace{0.5em}%
+}
+
+% Configuraci\'{o}n de listings para c\'{o}digo
+\lstset{
+  basicstyle=\small\ttfamily,
+  breaklines=true,
+  frame=single,
+  backgroundcolor=\color{gray!10},
+  keywordstyle=\color{fibra-blue},
+  commentstyle=\color{fibra-gray},
+}
+
+% ============================================================
+\begin{document}
+
+% Portada
+\begin{titlepage}
+  \centering
+  \vspace*{3cm}
+  {\Huge\bfseries\color{fibra-blue} FIBRAs Mexicanas\par}
+  \vspace{0.5cm}
+  {\Large Backtest Comparativo y Optimizaci\'{o}n Gen\'{e}tica\par}
+  \vspace{2cm}
+  {\large\color{fibra-gray} Bit\'{a}cora de Proyecto\par}
+  \vspace{0.5cm}
+  \rule{0.6\textwidth}{0.4pt}
+  \vspace{0.5cm}
+
+  \begin{tabular}{rl}
+    \textbf{Inicio:}     & 6 de mayo de 2026 \\
+    \textbf{Capital:}    & \$200{,}000 MXN \\
+    \textbf{Universo:}   & 15 FIBRAs activas \\
+    \textbf{Horizonte:}  & 2016--2025 (10 a\~{n}os) \\
+    \textbf{Stack:}      & Python 3.12 + Streamlit \\
+  \end{tabular}
+
+  \vspace{2cm}
+  {\small\color{fibra-gray}
+    Repositorio: \texttt{FIBRAS-mx/} \\
+    Entorno conda: \texttt{fibras-mx}
+  }
+\end{titlepage}
+
+% \'{I}ndice
+\tableofcontents
+\newpage
+
+% ============================================================
+% OBJETIVOS GENERALES
+% ============================================================
+\section*{Objetivos del Proyecto}
+\addcontentsline{toc}{section}{Objetivos del Proyecto}
+
+\begin{enumerate}
+  \item \textbf{Paso 0 -- Datos}: Construir un pipeline robusto de adquisici\'{o}n y validaci\'{o}n
+        de datos hist\'{o}ricos (precios diarios + distribuciones) para las 15 FIBRAs activas,
+        con cobertura objetivo $\geq 80\%$ por ticker.
+
+  \item \textbf{Experimento 1}: Backtestear 11 estrategias de inversi\'{o}n (E0--E10) sobre el
+        per\'{i}odo 2016--2025 con capital inicial de \$200{,}000 MXN, rebalanceo trimestral y
+        reinversi\'{o}n DRIP al 100\%.
+
+  \item \textbf{Experimento 2}: Optimizar la estrategia ganadora mediante un Algoritmo Gen\'{e}tico
+        (cromosoma $\sim$30 genes, poblaci\'{o}n 500, 200 generaciones) con validaci\'{o}n
+        anti-overfitting rigurosa (train/val/test, walk-forward, bootstrap).
+
+  \item \textbf{App Streamlit}: Exponer resultados y exploraci\'{o}n interactiva en una aplicaci\'{o}n
+        multipágina accesible localmente.
+\end{enumerate}
+
+% ============================================================
+% FIBRAs DEL UNIVERSO
+% ============================================================
+\section*{Universo de FIBRAs (15 activas, Q4 2025)}
+\addcontentsline{toc}{section}{Universo de FIBRAs}
+
+\begin{center}
+\begin{tabular}{llll}
+  \toprule
+  \textbf{Ticker} & \textbf{Nombre} & \textbf{Sector} & \textbf{Ticker Yahoo} \\
+  \midrule
+  FUNO11    & Fibra Uno       & Diversificada        & FUNO11.MX    \\
+  FIBRAPL14 & Fibra Prologis  & Industrial/log\'{i}stica  & FIBRAPL14.MX \\
+  FIBRAMQ12 & Fibra Macquarie & Industrial+comercial  & FIBRAMQ12.MX \\
+  DANHOS13  & Fibra Danhos    & Comercial+oficinas   & DANHOS13.MX  \\
+  FMTY14    & Fibra Monterrey & Mixta                & FMTY14.MX    \\
+  FIHO12    & Fibra Hotel     & Hotelero             & FIHO12.MX    \\
+  FINN13    & Fibra Inn       & Hotelero             & FINN13.MX    \\
+  FSHOP13   & Fibra Shop      & Centros comerciales  & FSHOP13.MX   \\
+  FIBRAUP18 & Fibra Upsite    & Industrial PyMEs     & FIBRAUP18.MX \\
+  FNOVA17   & Fibra Nova      & Industrial+mixta     & FNOVA17.MX   \\
+  FPLUS16   & Fibra Plus      & Diversificada peque\~{n}a & FPLUS16.MX   \\
+  STORAGE18 & Fibra Storage   & Self-storage         & STORAGE18.MX \\
+  FSITES20  & Fibra Sites     & Infraestructura telco & FSITES20.MX  \\
+  EDUCA18   & Fibra Educa     & Educativo            & EDUCA18.MX   \\
+  NEXT25    & Fibra Next      & Industrial (desde 2025) & NEXT25.MX \\
+  \bottomrule
+\end{tabular}
+\end{center}
+
+% ============================================================
+% SESIONES
+% ============================================================
+\newpage
+
+% ------------------------------------------------------------------
+\sesion{6 de mayo de 2026}{Sesi\'{o}n inicial -- Setup y estructura}
+% ------------------------------------------------------------------
+
+\subsection{Objetivos de la sesi\'{o}n}
+\begin{itemize}
+  \item Crear entorno conda \texttt{fibras-mx} (Python 3.12).
+  \item Definir estructura de directorios del repositorio.
+  \item Crear \texttt{requirements.txt} con todas las dependencias.
+  \item Iniciar la bit\'{a}cora del proyecto.
+  \item Dise\~{n}ar arquitectura del pipeline de datos (Paso 0).
+\end{itemize}
+
+\subsection{Acciones realizadas}
+
+\begin{enumerate}
+  \item \textbf{Entorno conda} creado exitosamente:
+\begin{lstlisting}[language=bash]
+conda create -n fibras-mx python=3.12 -y
+conda activate fibras-mx
+pip install -r requirements.txt
+\end{lstlisting}
+
+  \item \textbf{Estructura de directorios} inicializada:
+\begin{lstlisting}
+FIBRAS-mx/
+├── data/{raw/manual, processed, cache}
+├── src/{data, backtest, genetic}
+├── app/pages/
+├── notebooks/
+├── results/{charts, reports}
+└── docs/
+\end{lstlisting}
+
+  \item \textbf{Fuentes de datos} priorizadas (estrategia en cascada):
+  \begin{enumerate}[label=\arabic*.]
+    \item \texttt{yfinance} -- precios diarios y distribuciones con sufijo \texttt{.MX}
+    \item Scraping \texttt{fibrasmx.com} -- m\'{e}tricas trimestrales (ocupaci\'{o}n, LTV, payout)
+    \item Banxico SIE / BMV -- gaps en FIBRAs peque\~{n}as
+    \item CSVs manuales -- NEXT25 (solo desde 2025) y FIBRAs sin cobertura
+  \end{enumerate}
+
+  \item \textbf{Arquitectura Streamlit} dise\~{n}ada:
+  \begin{itemize}
+    \item P\'{a}gina 0: Dashboard calidad de datos (cobertura, huecos, fuente por ticker)
+    \item P\'{a}gina 1: Backtest E0--E10, tabla comparativa, equity curves
+    \item P\'{a}gina 2: Algoritmo Gen\'{e}tico, convergencia, cromosoma ganador
+  \end{itemize}
+\end{enumerate}
+
+\subsection{Hallazgos}
+\begin{itemize}
+  \item \textbf{NEXT25} solo existe desde 2025 -- ajustar horizontes de backtest por ticker.
+  \item \textbf{Terrafina (TERRA13)} fue absorbida por Fibra Prologis en 2024; no se incluye como ticker independiente.
+  \item Yahoo Finance puede tener ajuste de dividendos inconsistente en FIBRAs: se usar\'{a} precio \textbf{sin ajustar} + dividendos por separado para calcular retorno total manualmente.
+  \item FIBRAs de baja liquidez (FPLUS16, EDUCA18, STORAGE18, FSITES20) pueden tener huecos en la serie hist\'{o}rica.
+\end{itemize}
+
+\subsection{Pendientes (pr\'{o}xima sesi\'{o}n)}
+\begin{itemize}
+  \item[$\boxtimes$] Instalar dependencias en el entorno conda.
+  \item[$\boxtimes$] Implementar \texttt{src/data/fetcher.py} y ejecutar descarga inicial.
+  \item[$\boxtimes$] Ejecutar \texttt{src/data/validator.py} y revisar reporte de cobertura.
+  \item[$\boxtimes$] Lanzar \texttt{streamlit run app/main.py} y verificar p\'{a}gina de datos.
+\end{itemize}
+
+% ============================================================
+\newpage
+\sesion{7 de mayo de 2026}{Pipeline de datos completo + P\'{a}gina FAQ + AMEFIBRA}
+% ============================================================
+
+\subsection{Objetivos de la sesi\'{o}n}
+\begin{itemize}
+  \item Completar pipeline multi-fuente de datos (precios, dividendos, m\'{e}tricas).
+  \item Implementar p\'{a}gina de FAQs anal\'{i}ticos en Streamlit.
+  \item A\~{n}adir fuente AMEFIBRA para doble verificaci\'{o}n.
+  \item Inicializar repositorio git y hacer commits.
+\end{itemize}
+
+\subsection{Acciones realizadas}
+
+\begin{enumerate}
+
+  \item \textbf{Descubrimiento de Supabase de FibrasMX}: Se encontr\'{o} el cliente Supabase p\'{u}blico
+        embebido en los chunks JS del sitio \texttt{fibrasmx.com}. Clave: \texttt{sb\_publishable\_*}.
+        Tablas accesibles:
+        \begin{itemize}
+          \item \texttt{fibra\_dividends}: 537 registros desde 2011 -- fuente primaria de distribuciones.
+          \item \texttt{fibra\_premium\_metrics}: 308 trimestres de fundamentales (ocupaci\'{o}n, NOI, FFO).
+          \item \texttt{fibras}: 16 FIBRAs con sector, IPO, frecuencia de pago.
+        \end{itemize}
+
+  \item \textbf{Pipeline de datos} (\texttt{src/data/fetcher.py} + \texttt{src/data/fibrasmx.py}):
+        \begin{itemize}
+          \item Precios: yfinance \textrightarrow{} CSV manual (28{,}126 filas)
+          \item Dividendos: Supabase FibrasMX (primario) \textrightarrow{} yfinance \textrightarrow{} manual (383 registros)
+          \item M\'{e}tricas trimestrales: Supabase FibrasMX (250 registros, 2013Q1--2025Q4)
+        \end{itemize}
+
+  \item \textbf{Benchmarks} (\texttt{src/data/benchmarks.py}):
+        \begin{itemize}
+          \item IPC M\'{e}xico (\texttt{\^{}MXX}) v\'{i}a yfinance: 2{,}011 d\'{i}as disponibles.
+          \item CETES 28 d\'{i}as: tabla mensual hardcoded como fallback (rango 4.05\%--11.52\%).
+          \item Tasa objetivo Banxico: serie hist\'{o}rica de decisiones 2018--2025.
+          \item Market caps: desde endpoint \texttt{/api/prices} de FibrasMX.
+        \end{itemize}
+
+  \item \textbf{P\'{a}gina FAQ} (\texttt{app/pages/1\_faqs.py}): 8 tabs anal\'{i}ticos
+        sobre el mercado de FIBRAs 2021--2025:
+        \begin{enumerate}[label=\arabic*.]
+          \item \'{I}ndice equiponderado + drawdown
+          \item Evoluci\'{o}n de liquidez (volumen en MXN)
+          \item FIBRAs vs CETES (sin y con dividendos)
+          \item Banxico vs \'{I}ndice FIBRAs (correlaci\'{o}n rolling)
+          \item Pesos de mercado (treemap por sector)
+          \item Recortes de distribuciones por a\~{n}o
+          \item Liquidez en estr\'{e}s (Amihud Illiquidity Ratio)
+          \item COVID vs IPC M\'{e}xico
+        \end{enumerate}
+
+  \item \textbf{Scraper AMEFIBRA} (\texttt{src/data/amefibra.py}):
+        \begin{itemize}
+          \item Sitio WordPress SSR, scraping permitido por \texttt{robots.txt}.
+          \item 15 FIBRAs asociadas extra\'{i}das con nombre, ticker y sitio web corporativo.
+          \item 10 reportes PDF catalogados (principalmente Terrafina 2019--2021 y otros).
+          \item Pendiente: detecci\'{o}n de sectores y parseo de PDFs con \texttt{pdfplumber}.
+        \end{itemize}
+
+  \item \textbf{Git}: repositorio inicializado, \texttt{.gitignore} configurado
+        (excluye \texttt{data/processed/}, \texttt{scripts/}, \texttt{.env}).
+
+\end{enumerate}
+
+\subsection{Cobertura de datos al cierre de la sesi\'{o}n}
+
+\begin{center}
+\begin{tabular}{llrrl}
+  \toprule
+  \textbf{Ticker} & \textbf{Fuente precios} & \textbf{Cobertura} & \textbf{Dividendos} & \textbf{Estado} \\
+  \midrule
+  FUNO11    & yfinance & 96.4\% & 42 & OK \\
+  FIBRAPL14 & yfinance & 96.4\% & 42 & OK \\
+  FIBRAMQ12 & yfinance & 96.4\% & 39 & OK \\
+  DANHOS13  & yfinance & 96.4\% & 37 & OK \\
+  FMTY14    & yfinance & 96.4\% & 73 & OK (mensual) \\
+  FIHO12    & yfinance & 96.4\% & 27 & OK \\
+  FINN13    & yfinance & 96.4\% & 26 & OK \\
+  FSHOP13   & yfinance & 96.4\% & 25 & OK \\
+  FNOVA17   & yfinance & 85.9\% & 30 & OK \\
+  EDUCA18   & yfinance & 53.7\% & 16 & Alerta \\
+  STORAGE18 & yfinance & 38.6\% & 5  & Alerta \\
+  FSITES20  & yfinance & 72.7\% & 18 & Alerta \\
+  FIBRAUP18 & yfinance & 54.8\% & 1  & Alerta \\
+  FPLUS16   & yfinance & 96.4\% & 1  & Alerta (div.) \\
+  NEXT25    & yfinance & 33.7\% & 1  & Alerta (nueva) \\
+  \bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Hallazgos}
+\begin{itemize}
+  \item \textbf{Supabase FibrasMX}: fuente de dividendos mucho m\'{a}s completa que yfinance
+        (537 vs 382 registros). Incluye desglose fiscal: resultado fiscal vs. retorno de capital.
+  \item \textbf{COVID (ene--dic 2020)}: el \'{i}ndice de FIBRAs cay\'{o} significativamente;
+        las hoteleras (FIHO12, FINN13) recortaron distribuciones >50\% en 2020.
+  \item \textbf{Amihud en estr\'{e}s}: FIBRAs peque\~{n}as (STORAGE18, EDUCA18) muestran
+        ratio de iliquidez 5--10x mayor que las grandes en COVID.
+  \item \textbf{AMEFIBRA}: los sectores no aparecen en el HTML directo de \texttt{/portfolio-item/},
+        probablemente est\'{a}n en una clase CSS diferente o se cargan v\'{i}a shortcode de WPBakery.
+        Pendiente investigar con \texttt{/portfolio-category-sitemap.xml}.
+  \item \textbf{Market caps an\'{o}malos}: FPLUS16 y EDUCA18 muestran caps irrealmente altos en
+        la API de FibrasMX; se a\~{n}adi\'{o} aviso en la UI.
+\end{itemize}
+
+\subsection{Pendientes (pr\'{o}xima sesi\'{o}n)}
+\begin{itemize}
+  \item[$\square$] Motor de backtest (\texttt{src/backtest/engine.py}) -- Experimento 1.
+  \item[$\square$] 11 estrategias E0--E10 (\texttt{src/backtest/strategies.py}).
+  \item[$\square$] P\'{a}gina Streamlit de estrategias (\texttt{app/pages/2\_estrategias.py}).
+  \item[$\square$] Mejorar scraper AMEFIBRA: detecci\'{o}n de sectores + parseo de PDFs.
+  \item[$\square$] Obtener token Banxico SIE para CETES oficiales (reemplazar tabla hardcoded).
+\end{itemize}
+
+\end{document}

@@ -1,0 +1,28 @@
+# Datos procesados y caché (se regeneran con fetcher.py)
+data/processed/
+data/cache/
+data/raw/manual/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+*.pyc
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Entorno
+.env
+.env.local
+
+# Scripts temporales de exploración
+scripts/
+
+# macOS
+.DS_Store
+
+# Editor
+.vscode/settings.json
+*.swp
