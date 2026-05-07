@@ -1,0 +1,519 @@
+\documentclass[12pt,letterpaper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[spanish]{babel}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{hyperref}
+\usepackage{titlesec}
+\usepackage{enumitem}
+\usepackage{fancyhdr}
+\usepackage{amsmath}
+
+% Colores
+\definecolor{azulFIBRA}{RGB}{30, 80, 160}
+\definecolor{grisClaro}{RGB}{245, 245, 245}
+\definecolor{codigoBG}{RGB}{250, 250, 250}
+\definecolor{codigoFG}{RGB}{30, 30, 30}
+\definecolor{verde}{RGB}{0, 120, 60}
+\definecolor{rojo}{RGB}{160, 30, 30}
+
+% Títulos
+\titleformat{\section}{\large\bfseries\color{azulFIBRA}}{}{0em}{}[\titlerule]
+\titleformat{\subsection}{\normalsize\bfseries\color{azulFIBRA!80}}{}{0em}{}
+\titleformat{\subsubsection}{\normalsize\itshape}{}{0em}{}
+
+% Encabezado y pie de página
+\pagestyle{fancy}
+\fancyhf{}
+\rhead{\textcolor{gray}{\small FIBRAS-mx · Experimento 2}}
+\lhead{\textcolor{gray}{\small Plan: Página Algoritmo — ML + GA}}
+\cfoot{\thepage}
+
+% Código
+\lstset{
+  backgroundcolor=\color{codigoBG},
+  basicstyle=\ttfamily\small,
+  breaklines=true,
+  frame=single,
+  rulecolor=\color{gray!40},
+  commentstyle=\color{gray},
+  keywordstyle=\color{azulFIBRA}\bfseries,
+  stringstyle=\color{verde},
+  numbers=left,
+  numberstyle=\tiny\color{gray},
+  numbersep=8pt,
+  tabsize=2,
+}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=azulFIBRA,
+  urlcolor=azulFIBRA,
+}
+
+% ─────────────────────────────────────────────────────────────────────────────
+\begin{document}
+
+\begin{titlepage}
+  \centering
+  \vspace*{3cm}
+  {\Huge\bfseries\color{azulFIBRA} FIBRAS-mx\\[0.4em]}
+  {\LARGE Experimento 2: Algoritmo}\\[1.5em]
+  {\large\bfseries Aprendizaje Automático + Algoritmo Genético\\
+  para Selección Óptima de FIBRAs Mexicanas}
+  \vfill
+  \begin{tabular}{rl}
+    \textbf{Autor:}   & Daniel Becerril Olguín \\[0.3em]
+    \textbf{Fecha:}   & Mayo 2026 \\[0.3em]
+    \textbf{Stack:}   & Python 3.12 · Streamlit · scikit-learn · XGBoost · CatBoost · LightGBM \\[0.3em]
+    \textbf{Datos:}   & 2017--2026 · 15 FIBRAs · Diario \\
+  \end{tabular}
+  \vspace{2cm}
+\end{titlepage}
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Contexto y motivación}
+
+El Experimento 1 define 14 estrategias (E0--E13) con reglas codificadas manualmente
+—por ejemplo, E11 exige ocupación $\geq 90\%$ y LTV $\leq 40\%$; E12 usa el cruce
+dorado MA50/MA200. Estas reglas reflejan intuición del analista, no evidencia estadística.
+
+\medskip
+
+El \textbf{Experimento 2} invierte el proceso: en lugar de codificar reglas,
+el sistema \emph{aprende} qué combinación de variables y parámetros maximiza el
+Sharpe del portafolio resultante. Para eso se combina:
+
+\begin{itemize}[leftmargin=2em]
+  \item Un \textbf{registro de 400 features} (40 variables × 10 parametrizaciones
+        cada una), derivadas tanto de las estrategias existentes como de nueva
+        propuesta.
+  \item \textbf{9 modelos de ML} con hiperparámetros configurables, que predicen
+        el ranking relativo de cada FIBRA para el siguiente período.
+  \item Un \textbf{Algoritmo Genético (GA)} que busca simultáneamente el mejor
+        subconjunto de features (1--5), el modelo y sus hiperparámetros, y el
+        horizonte de predicción.
+\end{itemize}
+
+El reto principal es el pequeño universo: solo 15 FIBRAs. Sin embargo, al usar
+\textbf{frecuencia diaria}, el dataset de entrenamiento alcanza $\sim$26{,}250
+observaciones, suficiente para modelos con regularización apropiada.
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Partición de datos y frecuencia de observaciones}
+
+\subsection{Frecuencia: DIARIA}
+
+El punto clave es que el dataset \emph{no} es solo trimestral. Tenemos:
+
+\begin{itemize}[leftmargin=2em]
+  \item \textbf{Precios OHLCV:} diarios — usados directamente para features técnicas
+        (MA, RSI, Bollinger, momentum, etc.)
+  \item \textbf{Fundamentales trimestrales:} forward-fill diario entre fechas de
+        reporte. La ocupación del Q2 vale hacia adelante hasta que llega el Q3.
+  \item \textbf{Label:} retorno futuro a horizonte H días, donde H es parte del
+        cromosoma GA: $H \in \{1, 5, 10, 21, 42, 63, 126\}$.
+\end{itemize}
+
+\subsection{Partición}
+
+\begin{center}
+\begin{tabular}{llrrl}
+\toprule
+\textbf{Split} & \textbf{Período} & \textbf{Días hábiles} &
+\textbf{Obs.\ (días × 15 FIBRAs)} & \textbf{Propósito} \\
+\midrule
+Train      & 2017-01 → 2023-12 & $\sim$1{,}750 & $\sim$26{,}250 & Evolución GA + entrenamiento ML \\
+Test       & 2024-01 → 2025-12 & $\sim$500     & $\sim$7{,}500  & Evaluación del mejor cromosoma \\
+Validation & 2026-01 → hoy     & $\sim$90      & $\sim$1{,}350  & Holdout real, no visto \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Walk-forward CV (dentro del train)}
+
+Ventana expansiva, mínimo 252 días de historia. Paso de 63 días (trimestral).
+Entrena en días $\leq t$, predice días $t+1$ a $t+H$.
+
+\medskip
+\textbf{Conexión con rebalanceo trimestral:}
+\begin{enumerate}[leftmargin=2em]
+  \item Modelo entrenado con observaciones diarias.
+  \item En cada fecha de rebalanceo Q, se predicen scores para los próximos H días.
+  \item Se promedian los scores diarios del trimestre $\to$ ranking de FIBRAs $\to$
+        top-$k$ elegidas.
+  \item La ejecución sigue siendo trimestral (igual que E0--E13).
+\end{enumerate}
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Universo de features: 40 variables × 10 parametrizaciones = 400 features}
+
+\subsection{Bloque A — Variables de estrategias existentes (E0--E13)}
+
+\begin{longtable}{p{0.8cm} p{4.5cm} p{9cm}}
+\toprule
+\textbf{ID} & \textbf{Variable} & \textbf{10 Parametrizaciones} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{ID} & \textbf{Variable} & \textbf{10 Parametrizaciones} \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+A01 & Retorno trailing & 21d, 42d, 63d, 84d, 126d, 168d, 252d, 378d, 504d, 756d \\[3pt]
+A02 & Log-retorno trailing & Mismos 10 horizontes que A01 \\[3pt]
+A03 & Volatilidad realizada & 21d, 42d, 63d, 84d, 126d, 168d, 252d, 378d, 504d, ratio(21/252) \\[3pt]
+A04 & Precio / MAN & MA20, MA30, MA50, MA60, MA100, MA120, MA150, MA200, MA250, MA300 \\[3pt]
+A05 & MAN > MAM (Golden Cross) & (20>50), (20>100), (50>100), (50>200), (20>200), (100>200), (30>100), (30>200), (60>150), (10>50) \\[3pt]
+A06 & Fuerza relativa vs MA & Distancia \% a MA50, MA100, MA200, sus negativos/invertidos + log \\[3pt]
+A07 & Dividend yield TTM & raw, rank, >3\%, >4\%, >5\%, >6\%, >7\%, >8\%, >9\%, top25\% \\[3pt]
+A08 & Precio / NAV & raw, rank, <0.80, <0.90, <0.95, <1.0, <1.05, <1.10, descuento\%, rank\_desc \\[3pt]
+A09 & Ocupación & raw, rank, $\geq$0.75, $\geq$0.80, $\geq$0.85, $\geq$0.87, $\geq$0.90, $\geq$0.92, $\geq$0.95, QoQ-change \\[3pt]
+A10 & FFO yield & raw, rank, >4\%, >5\%, >6\%, >7\%, >8\%, >9\%, >10\%, anualizado×4 \\[3pt]
+A11 & Payout ratio (dist/FFO) & raw, rank, <0.60, <0.70, <0.75, <0.80, <0.90, <1.0, QoQ-change, inverted \\[3pt]
+A12 & LTV ratio & raw, rank, <0.30, <0.35, <0.40, <0.45, <0.50, QoQ-change, inverted, >0.50 \\[3pt]
+A13 & Cambio Banxico 6M & raw, >+50bps, >+100bps, <-50bps, <-100bps, |abs|>50bps, dirección, aceleración, rolling12M, zscore \\[3pt]
+A14 & Precio 30d mean & raw, rank, rank\_top3, rank\_top5, rank\_top7, top50\%, percentil, z-score, log, norm \\[3pt]
+A15 & Sector dummy & industrial=1, hoteles=1, comercial=1, industrial+comercial, diversificado=1, no\_hoteles=1, score\_ponderado, mixto=1, 4 sectores dummies \\
+\end{longtable}
+
+\subsection{Bloque B — Variables Fundamentales (nuevas)}
+
+\begin{longtable}{p{0.8cm} p{4.5cm} p{9cm}}
+\toprule
+\textbf{ID} & \textbf{Variable} & \textbf{10 Parametrizaciones} \\
+\midrule
+\endfirsthead
+\toprule \textbf{ID} & \textbf{Variable} & \textbf{10 Parametrizaciones} \\ \midrule
+\endhead \bottomrule \endfoot
+B01 & NOI margin & raw, rank, >30\%, >40\%, >50\%, >60\%, >65\%, QoQ-change, YoY-change, trend4Q \\[3pt]
+B02 & Deuda / Activos & raw, rank, <0.35, <0.40, <0.45, <0.50, <0.55, QoQ-change, inverted, trend4Q \\[3pt]
+B03 & Dilución de CBFIs & \%change YoY, positivo, negativo, abs change, <1\%, <3\%, <5\%, <-1\%, <-3\%, z-score \\[3pt]
+B04 & Apreciación de propiedades & \%change YoY en appraised\_value, rank, >0\%, >2\%, >5\%, >8\%, <0\% (deterioro), trend4Q, QoQ-change, zscore \\[3pt]
+B05 & Distribución / Activos & distribution\_per\_cbfi × cbfis / total\_assets, rank, >1\%, >2\%, >3\%, >4\%, >5\%, trend4Q, QoQ-change, z-score \\
+\end{longtable}
+
+\subsection{Bloque C — Variables Técnicas (nuevas)}
+
+\begin{longtable}{p{0.8cm} p{4.5cm} p{9cm}}
+\toprule
+\textbf{ID} & \textbf{Variable} & \textbf{10 Parametrizaciones} \\
+\midrule
+\endfirsthead
+\toprule \textbf{ID} & \textbf{Variable} & \textbf{10 Parametrizaciones} \\ \midrule
+\endhead \bottomrule \endfoot
+C01 & RSI & RSI-7, RSI-9, RSI-14, RSI-21, RSI-28, RSI-42, RSI-63, RSI<30, RSI>70, distancia-de-50 \\[3pt]
+C02 & Posición en Bollinger Band & BB(20,2), BB(20,1.5), BB(50,2), \%B(0-1), \%B<0.2, \%B>0.8, BB-width, BB-width-z, señal-squeeze, inverted-\%B \\[3pt]
+C03 & Z-score de volumen & z(21d), z(63d), z(126d), z(252d), >+1$\sigma$, >+2$\sigma$, <-1$\sigma$, tendencia, ratio(21/63), ratio(5/21) \\[3pt]
+C04 & Precio / 52-week high & raw\_ratio, >0.90, >0.95, >0.98, <0.80, <0.70, dist-desde-max\%, drawdown-52w, nuevo-máximo(1/0), recuperación-desde-mín \\[3pt]
+C05 & Amihud Illiquidity & ratio(21d), ratio(63d), ratio(252d), rank\_liq, rank\_iliq, >threshold\_high, <threshold\_low, trend4Q, z-score, vs-sector \\
+\end{longtable}
+
+\subsection{Bloque D — Variables de Tendencia (nuevas)}
+
+\begin{longtable}{p{0.8cm} p{4.5cm} p{9cm}}
+\toprule
+\textbf{ID} & \textbf{Variable} & \textbf{10 Parametrizaciones} \\
+\midrule
+\endfirsthead
+\toprule \textbf{ID} & \textbf{Variable} & \textbf{10 Parametrizaciones} \\ \midrule
+\endhead \bottomrule \endfoot
+D01 & Aceleración del momentum & ret63-ret126, ret21-ret63, ret126-ret252, ret63/ret126, señal\_positiva, zscore, rank, 2da derivada, negativa, normalizada \\[3pt]
+D02 & Score multi-timeframe & 0.25×ret21+0.25×ret63+0.25×ret126+0.25×ret252 + 8 combos de ponderaciones distintas + top25\% \\[3pt]
+D03 & Consistencia de retornos & \%días pos-21d, -63d, -126d, -252d, >50\%, >60\%, >70\%, tendencia-mejora, zscore, rank \\[3pt]
+D04 & EMA vs SMA (suavidad) & EMA21/SMA21, EMA50/SMA50, EMA vs SMA, >1(sube), <1(baja), distancia, ratio-cruzado, señal, z-score, rank \\[3pt]
+D05 & Canal de precio (posición) & \%channel(20d), \%channel(63d), \%channel(126d), >80\%, >90\%, <20\%, <10\%, breakout\_up, breakout\_dn, rango-normalizado \\
+\end{longtable}
+
+\subsection{Bloque E — Variables de Mercado (nuevas)}
+
+\begin{longtable}{p{0.8cm} p{4.5cm} p{9cm}}
+\toprule
+\textbf{ID} & \textbf{Variable} & \textbf{10 Parametrizaciones} \\
+\midrule
+\endfirsthead
+\toprule \textbf{ID} & \textbf{Variable} & \textbf{10 Parametrizaciones} \\ \midrule
+\endhead \bottomrule \endfoot
+E01 & Fuerza relativa vs índice FIBRAs & ret\_fibra - ret\_index (21d, 63d, 126d, 252d), rank, >0\%, >5\%, >10\%, zscore, rolling\_rank, tendencia \\[3pt]
+E02 & Momentum sectorial & avg\_ret\_peers (21d, 63d, 126d), fibra\_vs\_sector, sector\_rank, sector\_top2, sector\_bottom2, spread\_fibra-sector, z-score, rank, tendencia \\[3pt]
+E03 & Tendencia de volumen & slope\_21d, slope\_63d, slope\_126d, >0\%, >+20\%, >+50\%, ratio(5/15d), z-score, señal-positiva, rank \\[3pt]
+E04 & Correlación con IPC & corr\_63d, corr\_126d, corr\_252d, <0.3, >0.7, beta\_63d, beta\_126d, beta\_252d, tracking-error, correlación-inversa \\[3pt]
+E05 & Tamaño relativo (market-cap proxy) & rank\_size(top5), rank\_size(top3), decil, tercil, log\_price30d, cambio\_rank\_YoY, stable\_large, concentración, peso\_eq, peso\_prop \\
+\end{longtable}
+
+\subsection{Bloque F — Variables Macro (nuevas)}
+
+\begin{longtable}{p{0.8cm} p{4.5cm} p{9cm}}
+\toprule
+\textbf{ID} & \textbf{Variable} & \textbf{10 Parametrizaciones} \\
+\midrule
+\endfirsthead
+\toprule \textbf{ID} & \textbf{Variable} & \textbf{10 Parametrizaciones} \\ \midrule
+\endhead \bottomrule \endfoot
+F01 & Tasa real (Banxico - inflación) & tasa-CPI\_proxy, >5\%, >6\%, >7\%, >8\%, <4\%, cambio\_rate\_real, z-score, rank, tendencia \\[3pt]
+F02 & Spread yield-CETES & div\_yield - CETES\_28d, >0\%, >1\%, >2\%, >3\%, >4\%, zscore, rank, tendencia-spread, spread\_negativo \\[3pt]
+F03 & Fase del ciclo de tasas & subiendo(1/0), bajando(1/0), pausa(1/0), acelerando-suba, desacelerando-suba, cumulative\_change\_6M, velocidad, z-score, señal\_compuesta, dirección \\[3pt]
+F04 & Tendencia USD/MXN & ret\_usdmxn (21d, 63d, 126d, 252d), >0\% peso-débil, <0\% peso-fuerte, >+5\%, <-5\%, volatilidad, correlación-con-FIBRA, z-score \\[3pt]
+F05 & Momentum IPC & ret\_ipc (21d, 63d, 126d, 252d), >0\%, >5\%, >10\%, <0\%, zscore, rank\_vs\_historia, tendencia, IPC>MA200(1/0), breadth\_signal \\
+\end{longtable}
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Modelos de Machine Learning}
+
+\begin{center}
+\begin{tabular}{clp{8cm}}
+\toprule
+\textbf{\#} & \textbf{Modelo} & \textbf{Hiperparámetros clave} \\
+\midrule
+1 & Decision Tree         & max\_depth [2,3,4,5,6], min\_samples\_split [2,5,10,20] \\
+2 & Ridge Regression      & alpha [0.01, 0.1, 1, 10, 100] \\
+3 & Logistic Regression   & C [0.01, 0.1, 1, 10], solver [lbfgs, liblinear] \\
+4 & Random Forest         & n\_estimators [50,100,200], max\_depth [2,3,4,5,None] \\
+5 & XGBoost               & n\_estimators [50,100,200], max\_depth [2,3,4], lr [0.01,0.1,0.3] \\
+6 & CatBoost              & iterations [50,100,200], depth [2,3,4], lr [0.01,0.05,0.1] \\
+7 & LightGBM              & n\_estimators [50,100,200], max\_depth [2,3,4], lr [0.01,0.1] \\
+8 & Extra Trees           & n\_estimators [50,100,200], max\_depth [2,3,4,None] \\
+9 & ElasticNet            & alpha [0.01,0.1,1], l1\_ratio [0.1,0.5,0.9] \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\medskip
+
+\textbf{Tarea ML: ranking con horizonte configurable.}
+\begin{itemize}[leftmargin=2em]
+  \item El modelo predice un score continuo para cada FIBRA en cada día.
+  \item Label: retorno a $H$ días hacia adelante, normalizado entre 0--1 con rank entre FIBRAs.
+  \item $H \in \{1, 5, 10, 21, 42, 63, 126\}$ — parte del cromosoma del GA.
+  \item En rebalanceo: promedio de scores de los últimos 63 días $\to$ top-$k$ seleccionadas.
+  \item $k \in \{3, 4, 5, 6, 7\}$ — también optimizable por el GA.
+\end{itemize}
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Encoding del cromosoma (GA)}
+
+\begin{lstlisting}[language=Python]
+Gene = namedtuple("Gene", ["var_id", "param_idx"])
+# var_id  : 0-39  (40 variables)
+# param_idx: 0-9  (10 parametrizaciones)
+# Total espacio: 400 genes posibles
+
+@dataclass
+class Individual:
+    genes:        list[Gene]   # 1-5 genes, sin repetir var_id
+    model_type:   str          # uno de los 9 modelos
+    model_params: dict         # hiperparametros del modelo
+    horizon:      int          # H dias: in {1,5,10,21,42,63,126}
+    top_k:        int          # FIBRAs a seleccionar: in {3,4,5,6,7}
+    fitness:      float = -inf
+\end{lstlisting}
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Algoritmo Genético}
+
+\subsection{Inicialización}
+\begin{lstlisting}
+Poblacion: 20 individuos
+Para cada individuo:
+  n_genes    = random.choice([1, 2, 3, 4, 5])
+  genes      = random.sample(ALL_400_GENES, n_genes)  # sin repetir var_id
+  model_type = random.choice(MODELOS)
+  params     = random.choice(PARAM_GRID[model_type])
+  horizon    = random.choice([1, 5, 10, 21, 42, 63, 126])
+  top_k      = random.choice([3, 4, 5, 6, 7])
+\end{lstlisting}
+
+\subsection{Función de Fitness}
+\begin{lstlisting}
+fitness(ind):
+  1. Construir feature matrix DIARIA desde genes del individuo:
+       - Features tecnicas: computadas dia a dia desde precios (OHLCV)
+       - Features fundamentales: forward-fill de datos trimestrales
+       - Label: retorno a ind.horizon dias (rank normalizado 0-1)
+
+  2. Walk-forward CV (ventana minima 252 dias, paso 63 dias):
+       Para cada fold t en [2017+252d ... 2023-12-31]:
+         - Entrenar model(params) en dias <= t
+         - Predecir scores diarios para [t+1 .. t+ind.horizon]
+         - Agregar scores por FIBRA (promedio)
+         - Seleccionar top_k FIBRAs
+         - Calcular retorno del portfolio (igual peso, horizonte real)
+
+  3. Calcular Sharpe de la serie de retornos de portfolio
+  4. Parsimony penalty: -0.02 * (n_genes - 1)   <- menos es mejor
+  5. Retornar Sharpe ajustado
+\end{lstlisting}
+
+\subsection{Operadores evolutivos}
+
+\textbf{Selección:} Torneo de tamaño 3. Top-2 individuos pasan directamente
+(elitismo). Los demás compiten por los restantes lugares.
+
+\medskip
+\textbf{Cruzamiento:}
+\begin{lstlisting}
+cross(parent1, parent2):
+  gene_pool = union(parent1.genes, parent2.genes)
+  n_child   = random.choice([1..5])
+  child_genes  = random.sample(gene_pool, min(n_child, len(gene_pool)))
+  child_model  = random.choice([parent1.model_type, parent2.model_type])
+  child_params = mezcla de parametros de ambos padres (por key)
+  child_horizon = random.choice([parent1.horizon, parent2.horizon])
+  child_top_k   = random.choice([parent1.top_k,   parent2.top_k])
+\end{lstlisting}
+
+\textbf{Mutación} (P = 0.3 por tipo, se evalúan independientemente):
+
+\begin{itemize}[leftmargin=2em]
+  \item \texttt{mutate\_add}:   agregar un gene aleatorio (si $n < 5$)
+  \item \texttt{mutate\_remove}: eliminar un gene aleatorio (si $n > 1$)
+  \item \texttt{mutate\_swap}:  reemplazar un gene por uno nuevo
+  \item \texttt{mutate\_param}: cambiar \texttt{param\_idx} de un gene existente
+  \item \texttt{mutate\_model}: cambiar \texttt{model\_type} y/o \texttt{model\_params} (P = 0.2)
+  \item \texttt{mutate\_horizon}: cambiar horizonte $H$ (P = 0.2)
+\end{itemize}
+
+\subsection{Criterios de parada}
+
+\begin{itemize}[leftmargin=2em]
+  \item \texttt{max\_generations = 50} (configurable en UI, slider 10--100)
+  \item Early stopping: sin mejora en el mejor fitness por 10 generaciones consecutivas
+  \item Re-diversificación: si $>80\%$ de la población es idéntica, reiniciar
+        aleatoriamente al 40\% inferior (\emph{immigration})
+\end{itemize}
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Estructura de archivos}
+
+\begin{lstlisting}[language=bash]
+src/
+  features/
+    __init__.py
+    registry.py     # FEATURE_REGISTRY: dict[int, FeatureDef]
+    builder.py      # build_feature_matrix(genes, ...) -> DataFrame
+  genetic/
+    __init__.py
+    chromosome.py   # Gene, Individual dataclasses
+    operators.py    # crossover(), mutate(), tournament_select()
+    fitness.py      # evaluate_individual(ind, ...) -> float
+    ga.py           # run_ga(config) -> GAResult
+  ml/
+    __init__.py
+    models.py       # MODEL_REGISTRY: instanciar modelo
+    cross_val.py    # walk_forward_cv(...) -> List[float]
+app/pages/
+  3_algoritmo.py    # Streamlit pagina completa
+results/
+  ga_results.pkl    # Cache del resultado del GA
+\end{lstlisting}
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Página Streamlit (\texttt{3\_algoritmo.py})}
+
+La página se divide en tres secciones:
+
+\subsection{Sección 1 — Panel de configuración}
+
+\begin{itemize}[leftmargin=2em]
+  \item Generaciones: slider 10--100 (default 50)
+  \item Tamaño de población: slider 10--50 (default 20)
+  \item Modelos a incluir: multiselect (todos por default)
+  \item $k$ FIBRAs a seleccionar: slider 3--7 (default 5)
+  \item Botón \textbf{▶ Correr GA} (spinner de progreso generación por generación)
+  \item Botón \textbf{Cargar último resultado} (desde \texttt{results/ga\_results.pkl})
+\end{itemize}
+
+\subsection{Sección 2 — Resultados del GA (4 tabs)}
+
+\begin{description}
+  \item[\texttt{🧬 Convergencia}]
+    Gráfica fitness del mejor individuo y media poblacional vs.\ generación.
+    Tabla: top-5 individuos de la última generación.
+
+  \item[\texttt{🔬 Mejor cromosoma}]
+    Tabla de features seleccionadas: bloque, variable, parametrización elegida,
+    descripción. Modelo ML + hiperparámetros. Feature importance si disponible
+    (Random Forest, XGBoost, LightGBM).
+
+  \item[\texttt{📈 Equity curve}]
+    3 líneas: Train (2017--2023), Test (2024--2025), Validation (2026).
+    Comparativa vs E0 Naive 1/N y vs E13 (mejor estrategia manual).
+    Métricas: CAGR, Sharpe, MaxDD por período.
+
+  \item[\texttt{📊 Comparativa 9 modelos}]
+    Para el mejor feature set del GA, tabla de los 9 modelos:
+    columnas Sharpe\_train, Sharpe\_test, CAGR\_train, CAGR\_test, MaxDD\_test.
+    Celda ganadora resaltada en verde.
+\end{description}
+
+\subsection{Sección 3 — Análisis de variables}
+
+\begin{itemize}[leftmargin=2em]
+  \item Barras: frecuencia de cada variable en el top-10 de individuos finales.
+  \item Scatter: \texttt{param\_idx} elegido vs fitness (¿hay umbrales preferidos?).
+  \item Tabla: variables nunca seleccionadas (candidatos a eliminar del registro).
+\end{itemize}
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Dependencias nuevas}
+
+\begin{lstlisting}[language=bash]
+xgboost>=2.0
+catboost>=1.2
+lightgbm>=4.0
+scikit-learn>=1.4   # probablemente ya instalado
+joblib>=1.3         # probablemente ya instalado
+\end{lstlisting}
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Orden de implementación}
+
+\begin{enumerate}[leftmargin=2em]
+  \item \texttt{src/features/registry.py} — definir las 400 features (funciones \texttt{compute})
+  \item \texttt{src/features/builder.py} — \texttt{build\_feature\_matrix()}
+  \item \texttt{src/ml/models.py} + \texttt{cross\_val.py} — MODEL\_REGISTRY + walk-forward CV
+  \item \texttt{src/genetic/chromosome.py} — Gene, Individual
+  \item \texttt{src/genetic/operators.py} — crossover, mutate, select
+  \item \texttt{src/genetic/fitness.py} — \texttt{evaluate\_individual()}
+  \item \texttt{src/genetic/ga.py} — \texttt{run\_ga()}
+  \item \texttt{app/pages/3\_algoritmo.py} — página Streamlit completa
+  \item Actualizar \texttt{requirements.txt}
+  \item Smoke test: 3 generaciones × 5 individuos $\to$ sin errores
+\end{enumerate}
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Verificación}
+
+\begin{lstlisting}[language=bash]
+conda activate fibras-mx
+
+# Smoke test GA rapido
+python -c "
+from src.features.builder import build_feature_matrix
+from src.genetic.ga import run_ga
+result = run_ga(n_generations=3, population_size=5)
+print('Mejor Sharpe train:', result.best_individual.fitness)
+print('Genes:', result.best_individual.genes)
+print('Modelo:', result.best_individual.model_type)
+print('Horizonte:', result.best_individual.horizon)
+"
+
+# Verificar en Streamlit
+streamlit run app/main.py
+# -> Nueva pestana "Algoritmo" en sidebar
+# -> Boton "Correr GA" -> spinner -> graficas de convergencia
+\end{lstlisting}
+
+\vfill
+\begin{center}
+\textcolor{gray}{\small FIBRAS-mx · Plan Experimento 2 · Mayo 2026}
+\end{center}
+
+\end{document}
