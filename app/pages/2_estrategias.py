@@ -35,7 +35,7 @@ st.caption(
 )
 
 BACKTEST_START        = "2021-01-01"
-BACKTEST_END          = "2025-12-31"
+BACKTEST_END          = "2026-05-06"
 INITIAL_CAPITAL       = 450_000.0
 MONTHLY_CONTRIBUTION  = 10_000.0
 
@@ -236,11 +236,12 @@ cetes_cagr_ = cagr(cetes_val) * 100
 
 # ── Tabs de gráficas ──────────────────────────────────────────────────────────
 
-tab1, tab2, tab3, tab4 = st.tabs([
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "📈 Curvas de valor",
     "📉 Drawdown",
     "📅 Retornos anuales",
     "⚖️ Riesgo vs retorno",
+    "💰 Dividendos recibidos",
 ])
 
 # ── Tab 1: Equity curves ──────────────────────────────────────────────────────
@@ -455,3 +456,136 @@ with tab4:
         }),
         use_container_width=True,
     )
+
+# ── Tab 5: Dividendos recibidos ───────────────────────────────────────────────
+
+with tab5:
+    st.markdown(
+        "**Sí, todas las estrategias reinvierten dividendos (DRIP 100%).**  \n"
+        "En el día ex-dividendo, el motor calcula el efectivo recibido "
+        "(acciones en cartera × dividendo por CBFI) y lo convierte "
+        "automáticamente en más CBFIs al precio de cierre de ese día.  \n"
+        "La gráfica de abajo muestra cuánto efectivo se habría generado "
+        "cada mes si **no** se hubiera reinvertido — es el 'ingreso pasivo' "
+        "equivalente de la estrategia."
+    )
+    st.divider()
+
+    # Selector de estrategia (una sola)
+    div_code = st.selectbox(
+        "Ver dividendos de la estrategia:",
+        options=list(STRATEGIES.keys()),
+        index=list(STRATEGIES.keys()).index("E13"),
+        format_func=lambda c: f"{c} — {STRATEGIES[c]['nombre']}",
+        key="div_strategy_selector",
+    )
+
+    div_series = all_results[div_code]["dividends_received"].copy()
+    div_series.index = pd.to_datetime(div_series.index)
+
+    # Últimos 3 años: 2024, 2025, 2026
+    years_to_show = [2024, 2025, 2026]
+    div_filtered = div_series[div_series.index.year.isin(years_to_show)]
+
+    if div_filtered.empty:
+        st.info("Sin dividendos registrados en 2024-2026 para esta estrategia.")
+    else:
+        # Agrupar por mes
+        div_monthly = (
+            div_filtered
+            .resample("ME")
+            .sum()
+            .reset_index()
+        )
+        div_monthly["year"]  = div_monthly["date"].dt.year
+        div_monthly["month"] = div_monthly["date"].dt.month
+        div_monthly["mes"]   = div_monthly["date"].dt.strftime("%b")
+
+        YEAR_COLORS = {2024: "#636EFA", 2025: "#00CC96", 2026: "#EF553B"}
+
+        # ── Gráfica de barras agrupadas por año ───────────────────────────
+        fig5 = go.Figure()
+        for yr in years_to_show:
+            df_yr = div_monthly[div_monthly["year"] == yr]
+            if df_yr.empty:
+                continue
+            fig5.add_trace(go.Bar(
+                x=df_yr["date"],
+                y=df_yr["dividends_received"],
+                name=str(yr),
+                marker_color=YEAR_COLORS.get(yr, "#888"),
+                hovertemplate=(
+                    "<b>%{x|%B %Y}</b><br>"
+                    "Dividendos: $%{y:,.0f} MXN"
+                    "<extra></extra>"
+                ),
+            ))
+
+        # Línea de promedio mensual del período completo
+        avg_monthly = div_monthly["dividends_received"].mean()
+        fig5.add_hline(
+            y=avg_monthly,
+            line_dash="dot", line_color="gray",
+            annotation_text=f"Promedio ${avg_monthly:,.0f}/mes",
+            annotation_position="top left",
+        )
+
+        fig5.update_layout(
+            height=420,
+            barmode="group",
+            xaxis_title="",
+            yaxis_title="Dividendos recibidos (MXN)",
+            yaxis_tickformat="$,.0f",
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+            hovermode="x unified",
+        )
+        st.plotly_chart(fig5, use_container_width=True)
+
+        # ── Métricas resumen ──────────────────────────────────────────────
+        col1, col2, col3, col4 = st.columns(4)
+        yr_cols = {2024: col1, 2025: col2, 2026: col3}
+        for yr, col in yr_cols.items():
+            yr_data = div_monthly[div_monthly["year"] == yr]
+            if yr_data.empty:
+                with col:
+                    st.metric(label=f"Total {yr}", value="—")
+                continue
+            total_yr = yr_data["dividends_received"].sum()
+            avg_yr   = yr_data[yr_data["dividends_received"] > 0]["dividends_received"].mean()
+            with col:
+                st.metric(
+                    label=f"Total {yr}",
+                    value=f"${total_yr:,.0f}",
+                    delta=f"~${avg_yr:,.0f}/mes",
+                )
+
+        with col4:
+            total_3yr = div_monthly["dividends_received"].sum()
+            pv_now    = all_results[div_code]["portfolio_value"].iloc[-1]
+            last_yr   = div_monthly["year"].max()
+            yld_annl  = div_monthly[div_monthly["year"] == last_yr]["dividends_received"].sum()
+            curr_yld  = yld_annl / pv_now * 100 if pv_now > 0 else 0
+            st.metric(
+                label="Total 2024–2026",
+                value=f"${total_3yr:,.0f}",
+                delta=f"Yield ~{curr_yld:.1f}% (año más reciente)",
+            )
+
+        # ── Tabla detallada ───────────────────────────────────────────────
+        st.markdown("**Detalle mensual**")
+        pivot = div_monthly.pivot_table(
+            index="mes", columns="year",
+            values="dividends_received", aggfunc="sum", fill_value=0
+        )
+        # Ordenar meses
+        month_order = ["Jan","Feb","Mar","Apr","May","Jun",
+                       "Jul","Aug","Sep","Oct","Nov","Dec"]
+        pivot = pivot.reindex([m for m in month_order if m in pivot.index])
+        pivot["Total"] = pivot.sum(axis=1)
+
+        st.dataframe(
+            pivot.style.format("${:,.0f}").background_gradient(
+                cmap="Greens", subset=[c for c in pivot.columns if c != "Total"]
+            ),
+            use_container_width=True,
+        )
