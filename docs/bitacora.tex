@@ -70,9 +70,9 @@
 
   \begin{tabular}{rl}
     \textbf{Inicio:}     & 6 de mayo de 2026 \\
-    \textbf{Capital:}    & \$200{,}000 MXN \\
+    \textbf{Capital:}    & \$450{,}000 MXN + \$10{,}000/mes \\
     \textbf{Universo:}   & 15 FIBRAs activas \\
-    \textbf{Horizonte:}  & 2016--2025 (10 a\~{n}os) \\
+    \textbf{Horizonte:}  & 2021--2026 \\
     \textbf{Stack:}      & Python 3.12 + Streamlit \\
   \end{tabular}
 
@@ -102,9 +102,17 @@
         per\'{i}odo 2016--2025 con capital inicial de \$200{,}000 MXN, rebalanceo trimestral y
         reinversi\'{o}n DRIP al 100\%.
 
-  \item \textbf{Experimento 2}: Optimizar la estrategia ganadora mediante un Algoritmo Gen\'{e}tico
-        (cromosoma $\sim$30 genes, poblaci\'{o}n 500, 200 generaciones) con validaci\'{o}n
-        anti-overfitting rigurosa (train/val/test, walk-forward, bootstrap).
+  \item \textbf{Experimento 2} -- dos sub-experimentos independientes con el mismo split de datos:
+    \begin{itemize}
+      \item \textbf{2A -- ML Puro}: entrenar 9 modelos de aprendizaje autom\'{a}tico (Decision Tree,
+            Ridge, Logistic Regression, Random Forest, XGBoost, CatBoost, LightGBM, Extra Trees,
+            ElasticNet) sobre un universo de 400 features; comparar en train (2017--2023),
+            test (2024--2025) y holdout (2026).
+      \item \textbf{2B -- Algoritmo Gen\'{e}tico}: buscar en el espacio combinatorio de
+            40 variables $\times$ 10 parametrizaciones, eligiendo combinaciones de 1--5 genes,
+            para descubrir qu\'{e} regla de scoring maximiza el Sharpe del portafolio sin usar
+            ning\'{u}n modelo ML -- el cromosoma \emph{es} la estrategia.
+    \end{itemize}
 
   \item \textbf{App Streamlit}: Exponer resultados y exploraci\'{o}n interactiva en una aplicaci\'{o}n
         multipágina accesible localmente.
@@ -329,102 +337,187 @@ FIBRAS-mx/
 \end{itemize}
 
 % ─── Sesión 3 ─────────────────────────────────────────────────────────────────
-\sessionday{2026-05-07 (Sesi\'{o}n 3)}
+\newpage
+\sesion{7 de mayo de 2026 (Sesi\'{o}n 3)}{Motor de backtest, 14 estrategias E0--E13, p\'{a}gina Streamlit y dise\~{n}o del Experimento 2}
 
 \subsection{Objetivos de la sesi\'{o}n}
 \begin{itemize}
   \item Implementar el motor de backtest (Experimento 1).
-  \item Definir y codificar las 11 estrategias de inversi\'{o}n E0--E10.
-  \item Construir la p\'{a}gina Streamlit de comparativa de estrategias.
+  \item Definir y codificar 14 estrategias de inversi\'{o}n E0--E13.
+  \item Actualizar par\'{a}metros: capital \$450{,}000 MXN, aportaci\'{o}n \$10{,}000/mes, per\'{i}odo 2021--2026.
+  \item Construir la p\'{a}gina Streamlit de estrategias con 5 tabs.
+  \item Dise\~{n}ar el plan del Experimento 2 (ML + GA).
 \end{itemize}
 
 \subsection{Acciones realizadas}
+
 \begin{enumerate}
-  \item \textbf{\texttt{src/backtest/metrics.py}} -- M\'{o}dulo de m\'{e}tricas de performance:
-    \texttt{cagr()}, \texttt{annualized\_volatility()}, \texttt{max\_drawdown()},
-    \texttt{sharpe()}, \texttt{calmar()}, \texttt{annual\_returns()},
+
+  \item \textbf{\texttt{src/backtest/metrics.py}}: \texttt{cagr()}, \texttt{annualized\_volatility()},
+    \texttt{max\_drawdown()}, \texttt{sharpe()}, \texttt{calmar()}, \texttt{annual\_returns()},
     \texttt{consistency()}, \texttt{drawdown\_series()}, \texttt{summary()}.
-    Rf diaria: $(1 + r/100)^{1/365} - 1$ sobre CETES 28d.
 
   \item \textbf{\texttt{src/backtest/engine.py}} -- Motor de simulaci\'{o}n diaria:
     \begin{itemize}
       \item Rebalanceo trimestral (primer d\'{i}a h\'{a}bil de ene/abr/jul/oct).
       \item DRIP 100\%: dividendos reinvertidos al precio de cierre del d\'{i}a ex-div.
-      \item Costos: comisi\'{o}n 0.25\% $\times$ 1.16 IVA + slippage 0.10\% sobre monto operado.
-      \item Capital inicial: \$200{,}000 MXN.
-      \item Firma de estrategia: \texttt{fn(date, prices\_wide, dividends, metrics, banxico\_rates) -> dict[ticker, peso]}.
+      \item Comisi\'{o}n 0.25\% $\times$ 1.16 IVA + slippage 0.10\% sobre monto operado.
+      \item Aportaci\'{o}n mensual: primer d\'{i}a h\'{a}bil de cada mes.
+      \item \texttt{pw\_trade = pw.ffill(limit=5)} para decisiones; \texttt{pw\_value = pw.ffill(limit=60)} para valoraci\'{o}n.
     \end{itemize}
 
-  \item \textbf{\texttt{src/backtest/strategies.py}} -- 11 estrategias implementadas:
+  \item \textbf{\texttt{src/backtest/strategies.py}} -- 14 estrategias implementadas:
     \begin{center}
     \begin{tabular}{lll}
       \toprule
-      C\'{o}d. & Nombre & Descripci\'{o}n \\
+      C\'{o}d. & Nombre & Se\~{n}al principal \\
       \midrule
-      E0  & Equiponderada          & Todas las FIBRAs disponibles, peso igual \\
-      E1  & Grandes (proxy cap)    & Pondera por precio promedio 30d (proxy size) \\
-      E2  & Momentum 12M           & Top 5 por retorno trailing 12 meses \\
-      E3  & Momentum 3M            & Top 5 por retorno trailing 3 meses \\
-      E4  & Baja volatilidad       & Top 5 con menor vol realizada 12M \\
+      E0  & Naive 1/N (benchmark)  & Igual peso en todas las FIBRAs disponibles \\
+      E1  & Large Cap              & Peso proporcional a precio promedio 30d \\
+      E2  & Momentum 12M           & Top 5 por retorno trailing 252 d\'{i}as \\
+      E3  & Momentum 3M            & Top 5 por retorno trailing 63 d\'{i}as \\
+      E4  & Baja volatilidad       & Top 5 con menor vol realizada 252 d\'{i}as \\
       E5  & Alto yield             & Top 5 por dividendo TTM / precio \\
-      E6  & Calidad (ocupaci\'{o}n) & Top 5 por ocupaci\'{o}n \'{u}ltima m\'{e}trica trimestral \\
-      E7  & Valor (FFO yield)      & Top 5 por FFO/precio anualizado \\
-      E8  & Momentum + Yield       & Top 5 por score compuesto (50/50) \\
-      E9  & Contrarian             & Top 5 peores 12M (reversi\'{o}n a la media) \\
-      E10 & Rotaci\'{o}n sectorial & Pondera industrial vs hotelero seg\'{u}n direcci\'{o}n de tasas \\
+      E6  & Calidad (ocupaci\'{o}n) & Top 5 por tasa de ocupaci\'{o}n trimestral \\
+      E7  & Valor (FFO yield)      & Top 5 por FFO anualizado / precio \\
+      E8  & Momentum + Yield       & Top 5 por score compuesto 50/50 \\
+      E9  & Contrarian             & Top 5 peores retornos 12M \\
+      E10 & Rotaci\'{o}n sectorial & Industrial/hotelero seg\'{u}n direcci\'{o}n Banxico \\
+      E11 & Filtros fundamentales  & Ocupaci\'{o}n $\geq$90\%, LTV $\leq$40\%, payout $\leq$80\%; score yield+FFO \\
+      E12 & Medias m\'{o}viles     & Golden Cross: precio $>$ MA50 $>$ MA200; peso por fuerza \\
+      E13 & Precio $<$ NAV         & Ocupaci\'{o}n $\geq$90\% y precio $<$ valor te\'{o}rico \\
       \bottomrule
     \end{tabular}
     \end{center}
 
-  \item \textbf{\texttt{app/pages/2\_estrategias.py}} -- P\'{a}gina Streamlit con 4 tabs:
+  \item \textbf{\texttt{app/pages/2\_estrategias.py}} -- P\'{a}gina Streamlit con 5 tabs:
     \begin{itemize}
-      \item \textit{Curvas de valor}: equity curves + referencia CETES, m\'{e}tricas r\'{a}pidas.
-      \item \textit{Drawdown}: serie de caída relativa con fill, tabla MaxDD.
-      \item \textit{Retornos anuales}: heatmap + tabla coloreada por a\~{n}o y estrategia.
-      \item \textit{Risk-return}: scatter CAGR vs Vol, coloreado por Sharpe.
+      \item \textit{Curvas de valor}: equity curves + referencia CETES con aportaciones, m\'{e}tricas r\'{a}pidas.
+      \item \textit{Drawdown}: serie de ca\'{i}da relativa, tabla MaxDD.
+      \item \textit{Retornos anuales}: heatmap + tabla coloreada.
+      \item \textit{Riesgo vs retorno}: scatter CAGR vs Vol, coloreado por Sharpe.
+      \item \textit{Dividendos recibidos}: barras mensuales 2024--2026 por estrategia seleccionable.
     \end{itemize}
-    Backtests cacheados con \texttt{@st.cache\_data(ttl=3600)} para carga instant\'{a}nea.
-\end{enumerate}
 
-\subsection{Resultados (periodo 2018--2025, \$200{,}000 MXN inicial)}
-\begin{center}
-\begin{tabular}{llrrrrr}
-  \toprule
-  C\'{o}d. & Estrategia & CAGR & Sharpe & MaxDD & Calmar & Valor final \\
-  \midrule
-  E9  & Contrarian        &  12.90\% & 0.364 & -31.0\% & 0.416 & \$527{,}322 \\
-  E7  & Valor FFO yield   &   8.98\% & 0.255 & -47.3\% & 0.190 & \$397{,}607 \\
-  E5  & Alto yield        &   8.43\% & 0.258 & -33.2\% & 0.254 & \$381{,}927 \\
-  E6  & Calidad           &   7.75\% & 0.206 & -46.9\% & 0.165 & \$363{,}170 \\
-  E2  & Momentum 12M      &   6.99\% & 0.228 & -33.3\% & 0.210 & \$343{,}154 \\
-  E1  & Grandes           &   5.04\% & 0.105 & -29.7\% & 0.170 & \$296{,}314 \\
-  E8  & Mom + Yield       &   4.58\% & 0.081 & -39.2\% & 0.117 & \$286{,}136 \\
-  E4  & Baja volatilidad  &   4.53\% & 0.288 & -35.3\% & 0.128 & \$285{,}031 \\
-  E0  & Equiponderada     &   3.58\% & 0.065 & -35.6\% & 0.100 & \$264{,}923 \\
-  E10 & Rotaci\'{o}n sect.&   3.36\% & 0.047 & -37.6\% & 0.089 & \$260{,}423 \\
-  E3  & Momentum 3M       &  -2.69\% & -0.091 & -52.2\% & -0.052 & \$160{,}816 \\
-  \bottomrule
-\end{tabular}
-\end{center}
+  \item \textbf{Datos extendidos a 2026}: se a\~{n}adieron precios yfinance enero--mayo 2026
+        ($\sim$83 d\'{i}as por FIBRA). \texttt{BACKTEST\_END = "2026-05-06"}.
+
+  \item \textbf{Correcci\'{o}n de bug cr\'{i}tico en engine}: \texttt{\_execute\_rebalance} liquidaba posiciones
+        sin recuperar efectivo cuando el precio era NaN (FIBRAs con baja liquidez).
+        Soluci\'{o}n: par\'{a}metro \texttt{prices\_fallback} con ffill largo (limit=60).
+
+\end{enumerate}
 
 \subsection{Hallazgos}
 \begin{itemize}
-  \item E9 (Contrarian) domina el per\'{i}odo: las FIBRAs que m\'{a}s cayeron tienden a recuperarse
-        en el siguiente trimestre, especialmente post-COVID y post-pico de tasas.
-  \item E3 (Momentum 3M) es destructivo de valor: el ruido a corto plazo en mercados
-        ilíquidos genera rotaci\'{o}n excesiva y compra en picos.
-  \item El Sharpe m\'{a}s alto es E4 (Baja vol, 0.288), mejor relaci\'{o}n riesgo-retorno ajustada.
-  \item E7 (FFO yield) y E6 (Ocupaci\'{o}n) tienen MaxDD severo por concentraci\'{o}n en
-        pocas FIBRAs; los datos trimestrales tienen gaps que limitan la selecci\'{o}n.
-  \item Corregido bug de pandas 2.x: \texttt{fillna(method=''ffill'')} $\to$ \texttt{.ffill()}.
+  \item E13 (NAV discount) es la mejor estrategia del per\'{i}odo 2021--2026:
+        precio $<$ valor te\'{o}rico con alta ocupaci\'{o}n captura revalorizaci\'{o}n.
+  \item E12 (Golden Cross) funcion\'{o} mal inicialmente porque el engine perd\'{i}a capital
+        al liquidar posiciones sin precio conocido; corregido con el fallback de precios.
+  \item FMTY14 es la FIBRA con mayor frecuencia de distribuci\'{o}n (mensual, 73 pagos desde IPO).
+  \item El bug del engine afectaba a \textbf{todas} las estrategias con STORAGE18 en cartera;
+        la correcci\'{o}n cambi\'{o} resultados de E0 de 3.58\% a 6.93\% CAGR.
 \end{itemize}
 
 \subsection{Pendientes (pr\'{o}xima sesi\'{o}n)}
 \begin{itemize}
-  \item[$\square$] Algoritmo Gen\'{e}tico -- Experimento 2 (\texttt{src/genetic/}).
-  \item[$\square$] P\'{a}gina Streamlit del GA (\texttt{app/pages/3\_genetico.py}).
-  \item[$\square$] Mejorar scraper AMEFIBRA: sectores v\'{i}a sitemap XML.
+  \item[$\square$] Implementar Experimento 2A: pipeline ML (\texttt{src/features/}, \texttt{src/ml/}).
+  \item[$\square$] Implementar Experimento 2B: GA (\texttt{src/genetic/}).
+  \item[$\square$] P\'{a}gina Streamlit \texttt{app/pages/3\_algoritmo.py} con dos secciones.
   \item[$\square$] Token Banxico SIE para CETES oficiales.
+  \item[$\square$] Mejorar scraper AMEFIBRA: sectores v\'{i}a sitemap XML.
+\end{itemize}
+
+% ─── Sesión 4 ─────────────────────────────────────────────────────────────────
+\newpage
+\sesion{7 de mayo de 2026 (Sesi\'{o}n 4)}{Dise\~{n}o detallado del Experimento 2 -- ML Puro y Algoritmo Gen\'{e}tico}
+
+\subsection{Objetivos de la sesi\'{o}n}
+\begin{itemize}
+  \item Definir la arquitectura del Experimento 2 con claridad: dos sub-experimentos independientes.
+  \item Especificar el universo de features (40 variables $\times$ 10 parametrizaciones).
+  \item Dise\~{n}ar el encoding del cromosoma del GA (sin modelo ML).
+  \item Documentar el plan en PDF para revisi\'{o}n.
+\end{itemize}
+
+\subsection{Aclaraci\'{o}n arquitectural clave}
+
+El Experimento 2 \textbf{no es un sistema unificado}; son \textbf{dos enfoques independientes}:
+
+\begin{description}
+  \item[2A -- ML Puro] Alimentar el universo de 400 features a 9 modelos de ML con
+    sus hiperpar\'{a}metros. El modelo aprende qu\'{e} combinaci\'{o}n de se\~{n}ales predice
+    mejor el retorno futuro de cada FIBRA. Se entrena en 2017--2023, se eval\'{u}a
+    en 2024--2025 y se valida en 2026. La frecuencia del dataset es \textbf{diaria}
+    ($\sim$26{,}250 observaciones en train).
+
+  \item[2B -- GA] Buscar en el espacio combinatorio de
+    $40 \times 10 = 400$ genes posibles, eligiendo combinaciones de 1 a 5 genes.
+    El cromosoma \textbf{es la estrategia}: define una regla de scoring directa
+    (suma ponderada de features) que selecciona las top-$k$ FIBRAs cada trimestre.
+    No interviene ning\'{u}n modelo ML. La funci\'{o}n de fitness es el Sharpe
+    del portafolio resultante en el per\'{i}odo de entrenamiento.
+\end{description}
+
+\subsection{Universo de features (40 variables)}
+
+\begin{center}
+\begin{tabular}{llr}
+  \toprule
+  \textbf{Bloque} & \textbf{Origen} & \textbf{Variables} \\
+  \midrule
+  A & Derivadas de E0--E13 (estrategias existentes) & 15 \\
+  B & Fundamentales nuevas (NOI, deuda, dilución, apreciación) & 5 \\
+  C & T\'{e}cnicas nuevas (RSI, Bollinger, volumen, Amihud) & 5 \\
+  D & Tendencia nuevas (aceleraci\'{o}n, multi-timeframe, consistencia) & 5 \\
+  E & Mercado nuevas (fuerza relativa, sector, correlaci\'{o}n IPC) & 5 \\
+  F & Macro nuevas (tasa real, spread CETES, USD/MXN, IPC) & 5 \\
+  \midrule
+  \multicolumn{2}{l}{\textbf{Total}} & \textbf{40} \\
+  \bottomrule
+\end{tabular}
+\end{center}
+
+Cada variable tiene \textbf{10 parametrizaciones} (ventanas, umbrales o transformaciones distintas),
+generando $40 \times 10 = 400$ features \'{u}nicas. El GA elige genes del tipo
+\texttt{(var\_id: 0--39,\ param\_idx: 0--9)}.
+
+\subsection{Encoding del cromosoma (Experimento 2B)}
+
+\begin{lstlisting}[language=Python]
+Gene = namedtuple("Gene", ["var_id", "param_idx"])
+
+@dataclass
+class Individual:
+    genes:   list[Gene]  # 1-5 genes, sin repetir var_id
+    top_k:   int         # FIBRAs a seleccionar: {3,4,5,6,7}
+    fitness: float = -inf
+\end{lstlisting}
+
+La funci\'{o}n de fitness (sin ML):
+\begin{enumerate}
+  \item Para cada fecha de rebalanceo en train: calcular score de cada FIBRA
+        como suma de sus valores en los genes seleccionados.
+  \item Normalizar scores (rank 0--1), seleccionar top-$k$.
+  \item Retorno del portfolio: igual peso, hold 1 trimestre.
+  \item Fitness = Sharpe de la serie de retornos $-\ 0.02 \times (n\_genes - 1)$.
+\end{enumerate}
+
+Par\'{a}metros del GA: 20 individuos, 50 generaciones (configurable), torneo de tama\~{n}o 3,
+elitismo top-2, early stopping sin mejora en 10 generaciones.
+
+\subsection{Acciones realizadas}
+\begin{itemize}
+  \item Plan detallado escrito en \texttt{docs/plan\_algoritmo.pdf} (6 p\'{a}ginas).
+  \item Plan subido a GitHub junto con \texttt{plan\_algoritmo.tex} y el script generador.
+\end{itemize}
+
+\subsection{Pendientes (pr\'{o}xima sesi\'{o}n)}
+\begin{itemize}
+  \item[$\square$] Implementar \texttt{src/features/registry.py} y \texttt{builder.py}.
+  \item[$\square$] Implementar \texttt{src/ml/} (9 modelos + walk-forward CV).
+  \item[$\square$] Implementar \texttt{src/genetic/} (cromosoma, operadores, fitness, GA).
+  \item[$\square$] P\'{a}gina Streamlit \texttt{app/pages/3\_algoritmo.py}.
 \end{itemize}
 
 \end{document}
