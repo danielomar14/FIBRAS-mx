@@ -328,4 +328,103 @@ FIBRAS-mx/
   \item[$\square$] Obtener token Banxico SIE para CETES oficiales (reemplazar tabla hardcoded).
 \end{itemize}
 
+% ─── Sesión 3 ─────────────────────────────────────────────────────────────────
+\sessionday{2026-05-07 (Sesi\'{o}n 3)}
+
+\subsection{Objetivos de la sesi\'{o}n}
+\begin{itemize}
+  \item Implementar el motor de backtest (Experimento 1).
+  \item Definir y codificar las 11 estrategias de inversi\'{o}n E0--E10.
+  \item Construir la p\'{a}gina Streamlit de comparativa de estrategias.
+\end{itemize}
+
+\subsection{Acciones realizadas}
+\begin{enumerate}
+  \item \textbf{\texttt{src/backtest/metrics.py}} -- M\'{o}dulo de m\'{e}tricas de performance:
+    \texttt{cagr()}, \texttt{annualized\_volatility()}, \texttt{max\_drawdown()},
+    \texttt{sharpe()}, \texttt{calmar()}, \texttt{annual\_returns()},
+    \texttt{consistency()}, \texttt{drawdown\_series()}, \texttt{summary()}.
+    Rf diaria: $(1 + r/100)^{1/365} - 1$ sobre CETES 28d.
+
+  \item \textbf{\texttt{src/backtest/engine.py}} -- Motor de simulaci\'{o}n diaria:
+    \begin{itemize}
+      \item Rebalanceo trimestral (primer d\'{i}a h\'{a}bil de ene/abr/jul/oct).
+      \item DRIP 100\%: dividendos reinvertidos al precio de cierre del d\'{i}a ex-div.
+      \item Costos: comisi\'{o}n 0.25\% $\times$ 1.16 IVA + slippage 0.10\% sobre monto operado.
+      \item Capital inicial: \$200{,}000 MXN.
+      \item Firma de estrategia: \texttt{fn(date, prices\_wide, dividends, metrics, banxico\_rates) -> dict[ticker, peso]}.
+    \end{itemize}
+
+  \item \textbf{\texttt{src/backtest/strategies.py}} -- 11 estrategias implementadas:
+    \begin{center}
+    \begin{tabular}{lll}
+      \toprule
+      C\'{o}d. & Nombre & Descripci\'{o}n \\
+      \midrule
+      E0  & Equiponderada          & Todas las FIBRAs disponibles, peso igual \\
+      E1  & Grandes (proxy cap)    & Pondera por precio promedio 30d (proxy size) \\
+      E2  & Momentum 12M           & Top 5 por retorno trailing 12 meses \\
+      E3  & Momentum 3M            & Top 5 por retorno trailing 3 meses \\
+      E4  & Baja volatilidad       & Top 5 con menor vol realizada 12M \\
+      E5  & Alto yield             & Top 5 por dividendo TTM / precio \\
+      E6  & Calidad (ocupaci\'{o}n) & Top 5 por ocupaci\'{o}n \'{u}ltima m\'{e}trica trimestral \\
+      E7  & Valor (FFO yield)      & Top 5 por FFO/precio anualizado \\
+      E8  & Momentum + Yield       & Top 5 por score compuesto (50/50) \\
+      E9  & Contrarian             & Top 5 peores 12M (reversi\'{o}n a la media) \\
+      E10 & Rotaci\'{o}n sectorial & Pondera industrial vs hotelero seg\'{u}n direcci\'{o}n de tasas \\
+      \bottomrule
+    \end{tabular}
+    \end{center}
+
+  \item \textbf{\texttt{app/pages/2\_estrategias.py}} -- P\'{a}gina Streamlit con 4 tabs:
+    \begin{itemize}
+      \item \textit{Curvas de valor}: equity curves + referencia CETES, m\'{e}tricas r\'{a}pidas.
+      \item \textit{Drawdown}: serie de caída relativa con fill, tabla MaxDD.
+      \item \textit{Retornos anuales}: heatmap + tabla coloreada por a\~{n}o y estrategia.
+      \item \textit{Risk-return}: scatter CAGR vs Vol, coloreado por Sharpe.
+    \end{itemize}
+    Backtests cacheados con \texttt{@st.cache\_data(ttl=3600)} para carga instant\'{a}nea.
+\end{enumerate}
+
+\subsection{Resultados (periodo 2018--2025, \$200{,}000 MXN inicial)}
+\begin{center}
+\begin{tabular}{llrrrrr}
+  \toprule
+  C\'{o}d. & Estrategia & CAGR & Sharpe & MaxDD & Calmar & Valor final \\
+  \midrule
+  E9  & Contrarian        &  12.90\% & 0.364 & -31.0\% & 0.416 & \$527{,}322 \\
+  E7  & Valor FFO yield   &   8.98\% & 0.255 & -47.3\% & 0.190 & \$397{,}607 \\
+  E5  & Alto yield        &   8.43\% & 0.258 & -33.2\% & 0.254 & \$381{,}927 \\
+  E6  & Calidad           &   7.75\% & 0.206 & -46.9\% & 0.165 & \$363{,}170 \\
+  E2  & Momentum 12M      &   6.99\% & 0.228 & -33.3\% & 0.210 & \$343{,}154 \\
+  E1  & Grandes           &   5.04\% & 0.105 & -29.7\% & 0.170 & \$296{,}314 \\
+  E8  & Mom + Yield       &   4.58\% & 0.081 & -39.2\% & 0.117 & \$286{,}136 \\
+  E4  & Baja volatilidad  &   4.53\% & 0.288 & -35.3\% & 0.128 & \$285{,}031 \\
+  E0  & Equiponderada     &   3.58\% & 0.065 & -35.6\% & 0.100 & \$264{,}923 \\
+  E10 & Rotaci\'{o}n sect.&   3.36\% & 0.047 & -37.6\% & 0.089 & \$260{,}423 \\
+  E3  & Momentum 3M       &  -2.69\% & -0.091 & -52.2\% & -0.052 & \$160{,}816 \\
+  \bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Hallazgos}
+\begin{itemize}
+  \item E9 (Contrarian) domina el per\'{i}odo: las FIBRAs que m\'{a}s cayeron tienden a recuperarse
+        en el siguiente trimestre, especialmente post-COVID y post-pico de tasas.
+  \item E3 (Momentum 3M) es destructivo de valor: el ruido a corto plazo en mercados
+        ilíquidos genera rotaci\'{o}n excesiva y compra en picos.
+  \item El Sharpe m\'{a}s alto es E4 (Baja vol, 0.288), mejor relaci\'{o}n riesgo-retorno ajustada.
+  \item E7 (FFO yield) y E6 (Ocupaci\'{o}n) tienen MaxDD severo por concentraci\'{o}n en
+        pocas FIBRAs; los datos trimestrales tienen gaps que limitan la selecci\'{o}n.
+  \item Corregido bug de pandas 2.x: \texttt{fillna(method=''ffill'')} $\to$ \texttt{.ffill()}.
+\end{itemize}
+
+\subsection{Pendientes (pr\'{o}xima sesi\'{o}n)}
+\begin{itemize}
+  \item[$\square$] Algoritmo Gen\'{e}tico -- Experimento 2 (\texttt{src/genetic/}).
+  \item[$\square$] P\'{a}gina Streamlit del GA (\texttt{app/pages/3\_genetico.py}).
+  \item[$\square$] Mejorar scraper AMEFIBRA: sectores v\'{i}a sitemap XML.
+  \item[$\square$] Token Banxico SIE para CETES oficiales.
+\end{itemize}
+
 \end{document}
