@@ -38,14 +38,15 @@ VAL_END     = "2026-12-31"
 
 @dataclass
 class GAResult:
-    best_individual:     Individual
-    history_best:        list[float]
-    history_mean:        list[float]
-    top10:               list[Individual]
-    train_metrics:       dict
-    test_metrics:        dict
-    val_metrics:         dict
-    var_frequency:       dict[int, int] = field(default_factory=dict)
+    best_individual:      Individual
+    history_best:         list[float]
+    history_mean:         list[float]
+    top10:                list[Individual]
+    train_metrics:        dict
+    test_metrics:         dict
+    val_metrics:          dict
+    var_frequency:        dict[int, int]          = field(default_factory=dict)
+    history_populations:  list[list[float]]       = field(default_factory=list)
 
 
 def _load_prices_wide() -> pd.DataFrame:
@@ -93,8 +94,9 @@ def run_ga(
     for ind in population:
         ind.fitness = evaluate_individual(ind, fm_train, prices_wide, TRAIN_START, TRAIN_END)
 
-    history_best: list[float] = []
-    history_mean: list[float] = []
+    history_best:        list[float]       = []
+    history_mean:        list[float]       = []
+    history_populations: list[list[float]] = []
     best_ind = max(population, key=lambda x: x.fitness)
     no_improve = 0
 
@@ -105,6 +107,7 @@ def run_ga(
 
         history_best.append(best_fit)
         history_mean.append(mean_fit)
+        history_populations.append([ind.fitness for ind in population])
 
         current_best = max(population, key=lambda x: x.fitness)
         if current_best.fitness > best_ind.fitness:
@@ -172,6 +175,7 @@ def run_ga(
         test_metrics=test_met,
         val_metrics=val_met,
         var_frequency=var_freq,
+        history_populations=history_populations,
     )
 
     with open(cache_path, "wb") as f:

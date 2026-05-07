@@ -111,7 +111,7 @@ with sec_ml:
                     df_table.style
                         .format({"Sharpe Train": "{:.2f}", "Sharpe Test": "{:.2f}",
                                  "CAGR Test": "{:.1%}", "MaxDD Test": "{:.1%}"})
-                        .applymap(_color_sharpe, subset=["Sharpe Train", "Sharpe Test"]),
+                        .map(_color_sharpe, subset=["Sharpe Train", "Sharpe Test"]),
                     use_container_width=True,
                 )
 
@@ -229,12 +229,132 @@ with sec_ga:
         if result is None:
             st.info("Presiona 'Correr Algoritmo Genético' para comenzar.")
         else:
-            tab_conv, tab_chrom, tab_eq, tab_freq = st.tabs([
+            tab_anim, tab_conv, tab_chrom, tab_eq, tab_freq = st.tabs([
+                "Tab 0 — Evolución animada",
                 "Tab 1 — Convergencia",
                 "Tab 2 — Cromosoma ganador",
                 "Tab 3 — Equity curve",
                 "Tab 4 — Frecuencia variables",
             ])
+
+            # ── Tab 0: Animación de población ─────────────────────────────
+            with tab_anim:
+                history_populations = getattr(result, "history_populations", [])
+                if not history_populations:
+                    st.info("Re-ejecuta el GA (sin cache) para ver la animación por generación.")
+                else:
+                    import math as _math
+
+                    accum_x: list[float] = []
+                    accum_y: list[int]   = []
+                    max_xs:  list[float] = []
+                    mean_xs: list[float] = []
+                    gen_ys:  list[int]   = []
+                    frames_anim = []
+
+                    all_valid = [f for pop in history_populations for f in pop
+                                 if not (_math.isinf(f) or _math.isnan(f))]
+                    x_min = min(all_valid) - 0.05 if all_valid else -1
+                    x_max = max(all_valid) + 0.05 if all_valid else 1
+
+                    for g_idx, pop_fits in enumerate(history_populations):
+                        gen = g_idx + 1
+                        valid = [f for f in pop_fits if not (_math.isinf(f) or _math.isnan(f))]
+                        accum_x.extend(valid)
+                        accum_y.extend([gen] * len(valid))
+                        max_xs.append(max(valid) if valid else 0)
+                        mean_xs.append(float(np.mean(valid)) if valid else 0)
+                        gen_ys.append(gen)
+
+                        frames_anim.append(go.Frame(
+                            data=[
+                                go.Scatter(
+                                    x=list(accum_x), y=list(accum_y),
+                                    mode="markers",
+                                    marker=dict(
+                                        size=9,
+                                        color=list(accum_y),
+                                        colorscale="Viridis",
+                                        showscale=True,
+                                        colorbar=dict(title="Gen"),
+                                        opacity=0.75,
+                                    ),
+                                    name="Individuos",
+                                ),
+                                go.Scatter(
+                                    x=list(max_xs), y=list(gen_ys),
+                                    mode="lines+markers",
+                                    line=dict(dash="dot", color="#00CC96", width=2),
+                                    marker=dict(size=5),
+                                    name="Máximo",
+                                ),
+                                go.Scatter(
+                                    x=list(mean_xs), y=list(gen_ys),
+                                    mode="lines+markers",
+                                    line=dict(dash="dot", color="#EF553B", width=2),
+                                    marker=dict(size=5),
+                                    name="Promedio",
+                                ),
+                            ],
+                            name=str(gen),
+                        ))
+
+                    n_gens = len(history_populations)
+                    slider_steps = [
+                        dict(method="animate",
+                             args=[[str(g+1)], dict(mode="immediate",
+                                                    frame=dict(duration=300, redraw=True),
+                                                    transition=dict(duration=100))],
+                             label=str(g+1))
+                        for g in range(n_gens)
+                    ]
+
+                    fig_anim = go.Figure(
+                        data=frames_anim[0].data if frames_anim else [],
+                        layout=go.Layout(
+                            title="Evolución de la población GA — (X = Fitness, Y = Generación)",
+                            xaxis=dict(title="Fitness (Sharpe ajustado)", range=[x_min, x_max]),
+                            yaxis=dict(title="Generación", range=[0.5, n_gens + 0.5]),
+                            height=500,
+                            hovermode="closest",
+                            updatemenus=[dict(
+                                type="buttons",
+                                showactive=False,
+                                y=1.15, x=0, xanchor="left",
+                                buttons=[
+                                    dict(label="▶ Play", method="animate",
+                                         args=[None, dict(
+                                             frame=dict(duration=400, redraw=True),
+                                             fromcurrent=True,
+                                             transition=dict(duration=150),
+                                         )]),
+                                    dict(label="⏸ Pausa", method="animate",
+                                         args=[[None], dict(
+                                             frame=dict(duration=0, redraw=False),
+                                             mode="immediate",
+                                         )]),
+                                ],
+                            )],
+                            sliders=[dict(
+                                active=0,
+                                steps=slider_steps,
+                                x=0, y=0, len=1,
+                                currentvalue=dict(
+                                    prefix="Generación: ",
+                                    visible=True,
+                                    xanchor="center",
+                                ),
+                                transition=dict(duration=150),
+                            )],
+                        ),
+                        frames=frames_anim,
+                    )
+                    st.plotly_chart(fig_anim, use_container_width=True)
+                    st.caption(
+                        "Cada punto es un individuo de la población. "
+                        "Las líneas punteadas muestran el máximo y el promedio de fitness "
+                        "acumulados hasta esa generación."
+                    )
 
             # ── Tab 1: Convergencia ───────────────────────────────────────
             with tab_conv:
