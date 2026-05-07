@@ -156,39 +156,55 @@ def _execute_rebalance(
 
 # ── Motor principal ───────────────────────────────────────────────────────────
 
+def _monthly_contribution_dates(trading_days: list, contribution: float) -> dict:
+    """Primer día hábil de cada mes → monto de aportación."""
+    if contribution <= 0:
+        return {}
+    seen = set()
+    result = {}
+    for d in trading_days:
+        key = (d.year, d.month)
+        if key not in seen:
+            seen.add(key)
+            result[d] = contribution
+    return result
+
+
 def run_backtest(
     strategy_fn,
-    start: str = "2018-01-01",
+    start: str = "2021-01-01",
     end: str   = "2025-12-31",
     initial_capital: float = INITIAL_CAP,
+    monthly_contribution: float = 10_000.0,
     prices_wide: pd.DataFrame | None = None,
     dividends: pd.DataFrame | None   = None,
     metrics: pd.DataFrame | None     = None,
     banxico_rates: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """
-    Corre el backtest de una estrategia y devuelve DataFrame con columnas:
-        date, portfolio_value, cash, n_positions, rebalance, dividends_received, cost
+    Corre el backtest de una estrategia. Devuelve DataFrame con columnas:
+        date, portfolio_value, cash, invested_capital, n_positions,
+        rebalance, contribution, dividends_received, cost
+
+    monthly_contribution: monto en MXN que se inyecta el primer día hábil
+        de cada mes (simula aportación periódica). Se suma al cash y se
+        despliega en el siguiente rebalanceo trimestral.
     """
     if prices_wide is None or dividends is None or metrics is None:
         prices_wide, dividends, metrics = _load_data()
 
-    # Recortar al rango pedido
     pw = prices_wide.loc[start:end].copy()
-    # ffill corto para trading (5 días = 1 semana hábil)
     pw_trade = pw.ffill(limit=5)
-    # ffill largo para valuación: si una FIBRA deja de cotizar temporalmente,
-    # valorar al último precio conocido (evita colapso a $0 en gaps prolongados)
     pw_value = pw.ffill(limit=60)
 
     trading_days = pw_trade.index.tolist()
     if not trading_days:
         return pd.DataFrame()
 
-    rebalance_dates = set(_rebalance_dates(pw_trade, start, end))
+    rebalance_dates  = set(_rebalance_dates(pw_trade, start, end))
+    contribution_map = _monthly_contribution_dates(trading_days, monthly_contribution)
 
-    # Índice de dividendos para lookup rápido
-    div_by_date: dict[pd.Timestamp, pd.DataFrame] = {}
+    div_by_date: dict[pd.Timestamp, list] = {}
     for _, row in dividends.iterrows():
         d = row["date"]
         if d not in div_by_date:
@@ -196,14 +212,19 @@ def run_backtest(
         div_by_date[d].append(row)
 
     holdings: dict[str, float] = {}
-    cash = float(initial_capital)
+    cash            = float(initial_capital)
+    invested_capital = float(initial_capital)
     records = []
 
     for day in trading_days:
-        # prices_trade: para ejecutar operaciones (solo precios líquidos recientes)
         prices_trade = pw_trade.loc[day].dropna()
-        # prices_val: para valuar el portafolio (usa último precio conocido si hay gap)
         prices_val   = pw_value.loc[day].dropna()
+
+        # ── Aportación mensual ────────────────────────────────────────────
+        contribution = contribution_map.get(day, 0.0)
+        if contribution > 0:
+            cash             += contribution
+            invested_capital += contribution
 
         # ── Rebalanceo trimestral ─────────────────────────────────────────
         is_rebalance = day in rebalance_dates
@@ -216,7 +237,9 @@ def run_backtest(
                 metrics=metrics,
                 banxico_rates=banxico_rates,
             )
-            holdings, cash, cost = _execute_rebalance(holdings, weights, prices_trade, cash, prices_val)
+            holdings, cash, cost = _execute_rebalance(
+                holdings, weights, prices_trade, cash, prices_val
+            )
 
         # ── DRIP: reinversión de dividendos ───────────────────────────────
         divs_received = 0.0
@@ -230,7 +253,7 @@ def run_backtest(
                     new_shares = div_cash / prices_trade[t]
                     holdings[t] = holdings.get(t, 0) + new_shares
 
-        # ── Valor del portafolio (usa pw_value para no colapsar en gaps) ──
+        # ── Valor del portafolio ──────────────────────────────────────────
         equity = sum(
             holdings.get(t, 0) * prices_val.get(t, 0)
             for t in holdings
@@ -238,19 +261,23 @@ def run_backtest(
         portfolio_value = equity + cash
 
         records.append({
-            "date":              day,
-            "portfolio_value":   portfolio_value,
-            "cash":              cash,
-            "n_positions":       len(holdings),
-            "rebalance":         is_rebalance,
-            "dividends_received":divs_received,
-            "cost":              cost,
+            "date":               day,
+            "portfolio_value":    portfolio_value,
+            "invested_capital":   invested_capital,
+            "cash":               cash,
+            "n_positions":        len(holdings),
+            "rebalance":          is_rebalance,
+            "contribution":       contribution,
+            "dividends_received": divs_received,
+            "cost":               cost,
         })
 
     df = pd.DataFrame(records).set_index("date")
+    total_invested = df["invested_capital"].iloc[-1]
+    total_return = (df["portfolio_value"].iloc[-1] / total_invested - 1) * 100
     log.info(
         f"Backtest {start}–{end}: "
         f"${df['portfolio_value'].iloc[-1]:,.0f} MXN "
-        f"(CAGR {((df['portfolio_value'].iloc[-1]/initial_capital)**(365.25/((pw.index[-1]-pw.index[0]).days))-1)*100:.1f}%)"
+        f"(aportado ${total_invested:,.0f}, retorno total {total_return:.1f}%)"
     )
     return df

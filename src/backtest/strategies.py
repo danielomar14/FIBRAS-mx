@@ -303,79 +303,72 @@ def e10_sector_tilt(date, prices_wide, dividends, metrics, banxico_rates):
     return {t: w / total for t, w in weights.items()}
 
 
+def _rank_norm(d: dict) -> dict:
+    """Ranking normalizado 0–1 (mayor valor → rank más alto)."""
+    if not d:
+        return {}
+    vals = sorted(d.items(), key=lambda x: x[1])
+    n = len(vals)
+    return {t: i / max(n - 1, 1) for i, (t, _) in enumerate(vals)}
+
+
 def e11_video_strategy(date, prices_wide, dividends, metrics, banxico_rates):
     """
     E11 — Estrategia del video (filtros fundamentales + precio).
 
     Paso 1 — Filtro de seguridad (hard filters):
       - Ocupación >= 90%
-      - Payout ratio (distribución/FFO) <= 80%   [el video pide <65%; se usa
-        80% como umbral más realista dado que pocas FIBRAs cumplen <65%]
+      - LTV <= 40% (ahora disponible en métricas)
+      - Payout ratio (distribución/FFO) <= 80%
 
-    Paso 2 — Score de oportunidad (sumatoria de ranks normalizados 0-1):
-      - Dividend yield TTM (peso 40%): más yield → mejor compra
-      - FFO yield (peso 40%): proxy de "precio vs valor intrínseco";
-        alto FFO yield = mercado cobra poco por el flujo real
-      - Sesgo industrial (peso 20%): +1 si pertenece al sector industrial
-        (proxy del filtro de nearshoring del video)
+    Paso 2 — Score de oportunidad:
+      - Dividend yield TTM (40%)
+      - FFO yield como proxy de valor (40%)
+      - Sesgo industrial/nearshoring (20%)
 
-    LTV: no disponible en nuestras fuentes → filtro omitido.
     Selecciona top 5 por score compuesto.
     """
     tickers = _available(prices_wide)
 
-    # ── Paso 1: filtros duros ────────────────────────────────────────────────
     passed = []
     for t in tickers:
-        occ = _latest_metric(metrics, t, "occupancy_portfolio", date)
-        ffo = _latest_metric(metrics, t, "ffo_per_cbfi", date)
+        occ  = _latest_metric(metrics, t, "occupancy_portfolio", date)
+        ltv  = _latest_metric(metrics, t, "ltv_ratio", date)
+        ffo  = _latest_metric(metrics, t, "ffo_per_cbfi", date)
         dist = _latest_metric(metrics, t, "distribution_per_cbfi", date)
 
         if occ is None or np.isnan(occ) or occ < 0.90:
             continue
-
+        if ltv is not None and not np.isnan(ltv) and ltv > 0.40:
+            continue
         if ffo is not None and dist is not None and not np.isnan(ffo) and ffo > 0:
-            payout = dist / ffo
-            if payout > 0.80:
+            if dist / ffo > 0.80:
                 continue
 
         passed.append(t)
 
     if not passed:
-        passed = tickers  # fallback: sin datos suficientes → todos
+        passed = tickers
 
-    # ── Paso 2: score de oportunidad ─────────────────────────────────────────
-    yld_scores = {}
-    ffo_scores = {}
+    yld_scores, ffo_scores = {}, {}
     for t in passed:
         y = _ttm_yield(dividends, prices_wide, t, date)
         if y > 0:
             yld_scores[t] = y
-
         ffo = _latest_metric(metrics, t, "ffo_per_cbfi", date)
         col = prices_wide[t].dropna()
         if ffo and not np.isnan(ffo) and ffo > 0 and not col.empty and col.iloc[-1] > 0:
             ffo_scores[t] = (ffo * 4) / col.iloc[-1]
 
-    def rank_norm(d: dict) -> dict:
-        if not d:
-            return {}
-        vals = sorted(d.items(), key=lambda x: x[1])
-        n = len(vals)
-        return {t: i / max(n - 1, 1) for i, (t, _) in enumerate(vals)}
+    yld_rank = _rank_norm(yld_scores)
+    ffo_rank = _rank_norm(ffo_scores)
 
-    yld_rank = rank_norm(yld_scores)
-    ffo_rank = rank_norm(ffo_scores)
-
-    combo = {}
-    for t in passed:
-        score = (
-            0.40 * yld_rank.get(t, 0)
-            + 0.40 * ffo_rank.get(t, 0)
-            + 0.20 * (1.0 if t in INDUSTRIAL else 0.0)
-        )
-        combo[t] = score
-
+    combo = {
+        t: 0.40 * yld_rank.get(t, 0)
+         + 0.40 * ffo_rank.get(t, 0)
+         + 0.20 * (1.0 if t in INDUSTRIAL else 0.0)
+        for t in passed
+    }
     return _top_n(combo, n=5) if combo else _equal_weights(passed)
 
 
@@ -412,6 +405,70 @@ def e12_moving_average(date, prices_wide, dividends, metrics, banxico_rates):
 
     total = sum(in_trend.values())
     return {t: v / total for t, v in in_trend.items()}
+
+
+def e13_nav_discount(date, prices_wide, dividends, metrics, banxico_rates):
+    """
+    E13 — Precio < NAV + Ocupación ≥ 90% (estrategia del video).
+
+    Filtro duro:
+      - Ocupación >= 90%
+      - Precio de mercado < NAV por CBFI  (cotiza con descuento)
+
+    Si la FIBRA no tiene NAV disponible, se excluye del universo
+    (conservador: solo compramos lo que podemos verificar).
+
+    Entre las que pasan, pondera igual (1/N).
+    Si ninguna cotiza con descuento, invierte en las que tienen
+    mayor descuento relativo (precio/NAV más bajo) — top 5.
+    """
+    tickers = _available(prices_wide)
+
+    discount_scores = {}
+    for t in tickers:
+        # Ocupación
+        occ = _latest_metric(metrics, t, "occupancy_portfolio", date)
+        if occ is None or np.isnan(occ) or occ < 0.90:
+            continue
+
+        # NAV disponible
+        nav = _latest_metric(metrics, t, "nav_per_cbfi", date)
+        if nav is None or np.isnan(nav) or nav <= 0:
+            continue
+
+        # Precio actual
+        col = prices_wide[t].dropna()
+        if col.empty:
+            continue
+        price = col.iloc[-1]
+
+        # Solo si cotiza con descuento (precio < NAV)
+        if price < nav:
+            # Score: mayor descuento → mejor oportunidad
+            discount_scores[t] = (nav - price) / nav  # % de descuento
+
+    if not discount_scores:
+        # Fallback: si nadie cotiza con descuento, tomar las 5 con menor P/NAV
+        # (las más cercanas a NAV, aunque sean premium pequeño)
+        all_p_nav = {}
+        for t in tickers:
+            occ = _latest_metric(metrics, t, "occupancy_portfolio", date)
+            nav = _latest_metric(metrics, t, "nav_per_cbfi", date)
+            if occ is None or np.isnan(occ) or occ < 0.90:
+                continue
+            if nav is None or np.isnan(nav) or nav <= 0:
+                continue
+            col = prices_wide[t].dropna()
+            if col.empty:
+                continue
+            all_p_nav[t] = col.iloc[-1] / nav  # menor P/NAV = mejor
+
+        if all_p_nav:
+            sorted_t = sorted(all_p_nav, key=all_p_nav.get)
+            return _equal_weights(sorted_t[:5])
+        return _equal_weights(tickers)  # último fallback
+
+    return _equal_weights(list(discount_scores.keys()))
 
 
 # ── Registro de estrategias ───────────────────────────────────────────────────
@@ -617,5 +674,24 @@ STRATEGIES: dict[str, dict] = {
         ),
         "universo": "FIBRAs con precio > MA50 > MA200",
         "señal": "Cruce MA50 / MA200 + distancia % sobre MA50",
+    },
+    "E13": {
+        "fn": e13_nav_discount,
+        "nombre": "Precio < NAV (valor intrínseco)",
+        "categoria": "Fundamental",
+        "descripcion": (
+            "Implementa el filtro de 'comprar barato' del video: solo invierte "
+            "en FIBRAs que cotizan **por debajo de su NAV** (Net Asset Value, "
+            "o Valor Teórico) **y** tienen ocupación ≥ 90%. "
+            "El NAV representa el valor contable de los inmuebles menos la "
+            "deuda, dividido entre los CBFIs en circulación — básicamente "
+            "cuánto valen los 'ladrillos' por título. Comprar por debajo del "
+            "NAV significa comprar activos reales con descuento. "
+            "Si ninguna FIBRA con occ≥90% cotiza con descuento, selecciona "
+            "las 5 con menor prima sobre NAV (más cercanas al valor justo). "
+            "FIBRAs sin dato de NAV son excluidas — política conservadora."
+        ),
+        "universo": "FIBRAs con occ≥90% y precio < NAV; fallback: menor P/NAV",
+        "señal": "% descuento = (NAV − precio) / NAV",
     },
 }

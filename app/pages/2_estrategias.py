@@ -14,7 +14,7 @@ import plotly.graph_objects as go
 import plotly.express as px
 import streamlit as st
 
-from src.backtest.engine import run_backtest, _load_data, INITIAL_CAP
+from src.backtest.engine import run_backtest, _load_data
 from src.backtest.strategies import STRATEGIES
 from src.backtest.metrics import (
     summary, drawdown_series, annual_returns, cagr,
@@ -27,14 +27,17 @@ from src.data.benchmarks import (
 # ── Config ────────────────────────────────────────────────────────────────────
 
 st.set_page_config(page_title="Estrategias FIBRAS", layout="wide")
-st.title("Experimento 1 — Backtesting de 11 estrategias")
+st.title("Experimento 1 — Backtesting de 14 estrategias")
 st.caption(
-    "Capital inicial: $200,000 MXN · Rebalanceo trimestral · DRIP 100% · "
-    "Comisión 0.25% + IVA · Slippage 0.10% · Periodo 2018–2025"
+    "Capital inicial: $450,000 MXN · Aportación mensual: $10,000 MXN · "
+    "Rebalanceo trimestral · DRIP 100% · Comisión 0.25%+IVA · Slippage 0.10% · "
+    "Periodo 2021–2025"
 )
 
-BACKTEST_START = "2018-01-01"
-BACKTEST_END   = "2025-12-31"
+BACKTEST_START        = "2021-01-01"
+BACKTEST_END          = "2025-12-31"
+INITIAL_CAPITAL       = 450_000.0
+MONTHLY_CONTRIBUTION  = 10_000.0
 
 # Colores por categoría
 CAT_COLORS = {
@@ -66,6 +69,8 @@ def run_all_backtests(_pw, _div, _met, _banxico):
             s["fn"],
             start=BACKTEST_START,
             end=BACKTEST_END,
+            initial_capital=INITIAL_CAPITAL,
+            monthly_contribution=MONTHLY_CONTRIBUTION,
             prices_wide=_pw,
             dividends=_div,
             metrics=_met,
@@ -82,11 +87,11 @@ all_results = run_all_backtests(pw, div, met, banxico)
 
 with st.expander("¿Qué hace cada estrategia? (click para expandir)", expanded=False):
     st.markdown(
-        "Las 11 estrategias cubren los principales enfoques cuantitativos de "
-        "selección de activos. **E0 (Naive 1/N)** es la referencia interna: "
-        "ninguna estrategia activa debería rendir consistentemente menos que "
-        "asignar pesos iguales a todo el universo. "
-        "**CETES** es la referencia de costo de oportunidad libre de riesgo."
+        "Las 14 estrategias (E0–E13) cubren los principales enfoques de "
+        "selección de activos. **E0 (Naive 1/N)** es la referencia interna. "
+        "**E13** implementa los filtros del video: ocupación ≥ 90% y "
+        "precio de mercado < NAV (valor teórico de los inmuebles). "
+        "**CETES 28d** es el costo de oportunidad libre de riesgo."
     )
 
     # Agrupar por categoría
@@ -126,66 +131,81 @@ with st.expander("¿Qué hace cada estrategia? (click para expandir)", expanded=
 
 # ── Sección 2: Tabla resumen ──────────────────────────────────────────────────
 
-st.subheader("Resumen de métricas — todos los periodos (2018–2025)")
+st.subheader("Resumen de métricas — 2021–2025")
+
+# Capital total invertido (igual para todas las estrategias)
+total_invested = all_results["E0"]["invested_capital"].iloc[-1]
+st.caption(
+    f"Capital total aportado: **${total_invested:,.0f} MXN** "
+    f"(${INITIAL_CAPITAL:,.0f} inicial + ${MONTHLY_CONTRIBUTION:,.0f}/mes × "
+    f"{int((total_invested - INITIAL_CAPITAL) / MONTHLY_CONTRIBUTION):.0f} meses)"
+)
 
 rows = []
 for code, s in STRATEGIES.items():
-    pv = all_results[code]["portfolio_value"]
-    m  = summary(pv, rf_daily)
+    res = all_results[code]
+    pv  = res["portfolio_value"]
+    m   = summary(pv, rf_daily)
+    ganancia = pv.iloc[-1] - total_invested
     rows.append({
-        "Cód.":          code,
-        "Estrategia":    s["nombre"],
-        "Categoría":     s["categoria"],
-        "CAGR %":        m["CAGR"],
-        "Vol % (anual)": m["Volatilidad"],
-        "Sharpe":        m["Sharpe"],
-        "Calmar":        m["Calmar"],
-        "MaxDD %":       m["MaxDD"],
-        "Consist. %":    m["Consistencia"],
-        "Valor final $": m["Valor final"],
+        "Cód.":           code,
+        "Estrategia":     s["nombre"],
+        "Categoría":      s["categoria"],
+        "CAGR %":         m["CAGR"],
+        "Sharpe":         m["Sharpe"],
+        "MaxDD %":        m["MaxDD"],
+        "Valor final $":  m["Valor final"],
+        "Ganancia $":     round(ganancia, 0),
+        "Ret. s/invertido %": round((pv.iloc[-1] / total_invested - 1) * 100, 1),
     })
 
 df_summary = pd.DataFrame(rows).set_index("Cód.")
 
 def _c_cagr(v):
-    if v >= 8:  return "background-color:#1a7a4a;color:white"
-    if v >= 4:  return "background-color:#2ca05a;color:white"
+    if v >= 30: return "background-color:#1a7a4a;color:white"
+    if v >= 25: return "background-color:#2ca05a;color:white"
     if v >= 0:  return "background-color:#d4edda"
     return "background-color:#f8d7da"
 
 def _c_mdd(v):
-    if v >= -20: return "background-color:#d4edda"
-    if v >= -35: return "background-color:#fff3cd"
+    if v >= -8:  return "background-color:#d4edda"
+    if v >= -15: return "background-color:#fff3cd"
     return "background-color:#f8d7da"
 
 def _c_sharpe(v):
-    if v >= 0.3: return "background-color:#1a7a4a;color:white"
-    if v >= 0.1: return "background-color:#d4edda"
+    if v >= 1.5: return "background-color:#1a7a4a;color:white"
+    if v >= 1.0: return "background-color:#d4edda"
     if v >= 0:   return ""
+    return "background-color:#f8d7da"
+
+def _c_ganancia(v):
+    if v > 900_000: return "background-color:#1a7a4a;color:white"
+    if v > 500_000: return "background-color:#2ca05a;color:white"
+    if v > 0:       return "background-color:#d4edda"
     return "background-color:#f8d7da"
 
 styled = (
     df_summary.style
-    .map(_c_cagr,   subset=["CAGR %"])
-    .map(_c_mdd,    subset=["MaxDD %"])
-    .map(_c_sharpe, subset=["Sharpe"])
+    .map(_c_cagr,    subset=["CAGR %"])
+    .map(_c_mdd,     subset=["MaxDD %"])
+    .map(_c_sharpe,  subset=["Sharpe"])
+    .map(_c_ganancia,subset=["Ganancia $"])
     .format({
-        "CAGR %":        "{:.2f}",
-        "Vol % (anual)": "{:.2f}",
-        "Sharpe":        "{:.3f}",
-        "Calmar":        "{:.3f}",
-        "MaxDD %":       "{:.2f}",
-        "Consist. %":    "{:.1f}",
-        "Valor final $": "{:,.0f}",
+        "CAGR %":              "{:.2f}",
+        "Sharpe":              "{:.3f}",
+        "MaxDD %":             "{:.2f}",
+        "Valor final $":       "${:,.0f}",
+        "Ganancia $":          "${:,.0f}",
+        "Ret. s/invertido %":  "{:.1f}%",
     })
 )
-st.dataframe(styled, use_container_width=True, height=450)
+st.dataframe(styled, use_container_width=True, height=500)
 
 # ── Sección 3: Selector ────────────────────────────────────────────────────────
 
 st.divider()
 all_codes  = list(STRATEGIES.keys())
-default_sel = ["E0", "E5", "E9", "E11", "E12"]
+default_sel = ["E0", "E9", "E11", "E13"]
 selected = st.multiselect(
     "Seleccionar estrategias a graficar",
     options=all_codes,
@@ -198,12 +218,20 @@ if not selected:
 
 COLOR_PALETTE = px.colors.qualitative.Plotly
 
-# CETES acumulado (referencia libre de riesgo)
-cetes_full  = fetch_cetes(BACKTEST_START, BACKTEST_END)
-rf_full     = cetes_daily_return(cetes_full["cetes_pct"])
-trading     = all_results["E0"].index
-rf_trading  = rf_full.reindex(trading).ffill().fillna(0)
-cetes_val   = INITIAL_CAP * (1 + rf_trading).cumprod()
+# CETES acumulado con aportaciones mensuales (mismatch justo vs FIBRAs)
+cetes_full = fetch_cetes(BACKTEST_START, BACKTEST_END)
+rf_full    = cetes_daily_return(cetes_full["cetes_pct"])
+trading    = all_results["E0"].index
+rf_trading = rf_full.reindex(trading).ffill().fillna(0)
+
+# Simular CETES con las mismas aportaciones
+cetes_val = pd.Series(index=trading, dtype=float)
+_cetes_balance = INITIAL_CAPITAL
+for i, day in enumerate(trading):
+    contrib = all_results["E0"]["contribution"].iloc[i]
+    _cetes_balance = (_cetes_balance + contrib) * (1 + rf_trading.iloc[i])
+    cetes_val.iloc[i] = _cetes_balance
+
 cetes_cagr_ = cagr(cetes_val) * 100
 
 # ── Tabs de gráficas ──────────────────────────────────────────────────────────

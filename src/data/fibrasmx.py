@@ -95,7 +95,12 @@ def fetch_metrics(fibras_df: pd.DataFrame | None = None) -> pd.DataFrame:
 
     rows = _get(
         "fibra_premium_metrics",
-        select="fibra_id,period,distribution_per_cbfi,occupancy_portfolio,noi_margin,ffo_per_cbfi",
+        select=(
+            "fibra_id,period,"
+            "distribution_per_cbfi,occupancy_portfolio,noi_margin,ffo_per_cbfi,"
+            "nav_per_cbfi,book_value_per_cbfi,ltv_ratio,cbfis_outstanding,"
+            "total_debt,property_appraised_value,total_assets"
+        ),
         order="period.asc",
     )
     df = pd.DataFrame(rows)
@@ -106,15 +111,21 @@ def fetch_metrics(fibras_df: pd.DataFrame | None = None) -> pd.DataFrame:
     df["ticker"] = df["fibra_id"].map(id_to_ticker)
     df = df[df["ticker"].isin(UNIVERSE)].copy()
 
-    # Parsear "2025Q4" -> year + quarter + fecha de inicio de trimestre
     df["year"]    = df["period"].str[:4].astype(int)
     df["quarter"] = df["period"].str[5].astype(int)
-    # e.g. "2025Q4" -> first day of that quarter
-    df["date"] = pd.PeriodIndex(df["period"].str.replace("Q", "q", n=1), freq="Q").to_timestamp()
+    df["date"]    = pd.PeriodIndex(df["period"].str.replace("Q", "q", n=1), freq="Q").to_timestamp()
     df["source"]  = "fibrasmx"
 
-    keep = ["date", "ticker", "period", "year", "quarter",
-            "distribution_per_cbfi", "occupancy_portfolio", "noi_margin", "ffo_per_cbfi", "source"]
+    # nav_per_cbfi: usar book_value_per_cbfi como fallback si nav está vacío
+    df["nav_per_cbfi"] = df["nav_per_cbfi"].combine_first(df["book_value_per_cbfi"])
+
+    keep = [
+        "date", "ticker", "period", "year", "quarter",
+        "distribution_per_cbfi", "occupancy_portfolio", "noi_margin", "ffo_per_cbfi",
+        "nav_per_cbfi", "ltv_ratio", "cbfis_outstanding",
+        "total_debt", "property_appraised_value", "total_assets",
+        "source",
+    ]
     return df[keep].sort_values(["ticker", "date"]).reset_index(drop=True)
 
 
