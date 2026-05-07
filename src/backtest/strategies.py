@@ -303,6 +303,117 @@ def e10_sector_tilt(date, prices_wide, dividends, metrics, banxico_rates):
     return {t: w / total for t, w in weights.items()}
 
 
+def e11_video_strategy(date, prices_wide, dividends, metrics, banxico_rates):
+    """
+    E11 — Estrategia del video (filtros fundamentales + precio).
+
+    Paso 1 — Filtro de seguridad (hard filters):
+      - Ocupación >= 90%
+      - Payout ratio (distribución/FFO) <= 80%   [el video pide <65%; se usa
+        80% como umbral más realista dado que pocas FIBRAs cumplen <65%]
+
+    Paso 2 — Score de oportunidad (sumatoria de ranks normalizados 0-1):
+      - Dividend yield TTM (peso 40%): más yield → mejor compra
+      - FFO yield (peso 40%): proxy de "precio vs valor intrínseco";
+        alto FFO yield = mercado cobra poco por el flujo real
+      - Sesgo industrial (peso 20%): +1 si pertenece al sector industrial
+        (proxy del filtro de nearshoring del video)
+
+    LTV: no disponible en nuestras fuentes → filtro omitido.
+    Selecciona top 5 por score compuesto.
+    """
+    tickers = _available(prices_wide)
+
+    # ── Paso 1: filtros duros ────────────────────────────────────────────────
+    passed = []
+    for t in tickers:
+        occ = _latest_metric(metrics, t, "occupancy_portfolio", date)
+        ffo = _latest_metric(metrics, t, "ffo_per_cbfi", date)
+        dist = _latest_metric(metrics, t, "distribution_per_cbfi", date)
+
+        if occ is None or np.isnan(occ) or occ < 0.90:
+            continue
+
+        if ffo is not None and dist is not None and not np.isnan(ffo) and ffo > 0:
+            payout = dist / ffo
+            if payout > 0.80:
+                continue
+
+        passed.append(t)
+
+    if not passed:
+        passed = tickers  # fallback: sin datos suficientes → todos
+
+    # ── Paso 2: score de oportunidad ─────────────────────────────────────────
+    yld_scores = {}
+    ffo_scores = {}
+    for t in passed:
+        y = _ttm_yield(dividends, prices_wide, t, date)
+        if y > 0:
+            yld_scores[t] = y
+
+        ffo = _latest_metric(metrics, t, "ffo_per_cbfi", date)
+        col = prices_wide[t].dropna()
+        if ffo and not np.isnan(ffo) and ffo > 0 and not col.empty and col.iloc[-1] > 0:
+            ffo_scores[t] = (ffo * 4) / col.iloc[-1]
+
+    def rank_norm(d: dict) -> dict:
+        if not d:
+            return {}
+        vals = sorted(d.items(), key=lambda x: x[1])
+        n = len(vals)
+        return {t: i / max(n - 1, 1) for i, (t, _) in enumerate(vals)}
+
+    yld_rank = rank_norm(yld_scores)
+    ffo_rank = rank_norm(ffo_scores)
+
+    combo = {}
+    for t in passed:
+        score = (
+            0.40 * yld_rank.get(t, 0)
+            + 0.40 * ffo_rank.get(t, 0)
+            + 0.20 * (1.0 if t in INDUSTRIAL else 0.0)
+        )
+        combo[t] = score
+
+    return _top_n(combo, n=5) if combo else _equal_weights(passed)
+
+
+def e12_moving_average(date, prices_wide, dividends, metrics, banxico_rates):
+    """
+    E12 — Medias móviles (Golden Cross).
+
+    Para cada FIBRA con suficiente historial:
+      - Calcula MA50 (media simple 50 días) y MA200 (media simple 200 días)
+      - "En tendencia alcista" si: precio > MA50 Y MA50 > MA200
+
+    Invierte en igual peso entre las FIBRAs que están en tendencia alcista.
+    Si ninguna califica, usa E0 (equiponderada) como fallback.
+    También pondera por "fuerza": distancia % del precio sobre su MA50
+    (más alejado hacia arriba → mayor convicción).
+    """
+    tickers = _available(prices_wide, min_history_days=210)
+    in_trend = {}
+
+    for t in tickers:
+        col = prices_wide[t].dropna()
+        if len(col) < 200:
+            continue
+        price = col.iloc[-1]
+        ma50  = col.tail(50).mean()
+        ma200 = col.tail(200).mean()
+
+        if price > ma50 and ma50 > ma200:
+            strength = (price - ma50) / ma50  # % sobre MA50
+            in_trend[t] = max(strength, 0.001)  # siempre positivo
+
+    if not in_trend:
+        return _equal_weights(tickers) if tickers else {}
+
+    total = sum(in_trend.values())
+    return {t: v / total for t, v in in_trend.items()}
+
+
 # ── Registro de estrategias ───────────────────────────────────────────────────
 
 STRATEGIES: dict[str, dict] = {
@@ -470,5 +581,41 @@ STRATEGIES: dict[str, dict] = {
         ),
         "universo": "Todas, con pesos diferenciados por sector",
         "señal": "Cambio tasa Banxico últimos 6 meses (±0.25%)",
+    },
+    "E11": {
+        "fn": e11_video_strategy,
+        "nombre": "Filtros fundamentales (video)",
+        "categoria": "Fundamental",
+        "descripcion": (
+            "Replica la metodología del video de inversión en FIBRAs mexicanas. "
+            "**Filtro de seguridad (hard):** ocupación ≥ 90% y payout ratio "
+            "(distribución/FFO) ≤ 80% (el video sugiere <65%; se usa 80% para "
+            "mantener un universo invertible dado que pocas FIBRAs cumplen el "
+            "umbral estricto). **Filtro de oportunidad (scoring):** se rankean "
+            "las FIBRAs que pasan el filtro por dividend yield TTM (40%), "
+            "FFO yield como proxy de precio vs valor intrínseco (40%) y "
+            "sesgo industrial por nearshoring (20%). "
+            "LTV: no disponible en nuestras fuentes, filtro omitido. "
+            "Top 5 por score compuesto."
+        ),
+        "universo": "FIBRAs con occ≥90% y payout≤80%, luego top 5 por score",
+        "señal": "40% yield + 40% FFO yield + 20% sesgo industrial",
+    },
+    "E12": {
+        "fn": e12_moving_average,
+        "nombre": "Medias móviles (Golden Cross)",
+        "categoria": "Tendencial",
+        "descripcion": (
+            "Estrategia clásica de análisis técnico. Invierte en las FIBRAs "
+            "que están en **tendencia alcista confirmada**: precio > MA50 "
+            "**y** MA50 > MA200 (Golden Cross). El peso de cada FIBRA es "
+            "proporcional a qué tan por encima de su MA50 está el precio "
+            "(mayor distancia = mayor convicción). Si ninguna FIBRA cumple "
+            "la condición, cae a equiponderada (E0) como fallback. "
+            "El Death Cross (MA50 cruza por debajo de MA200) expulsa la "
+            "FIBRA del portafolio hasta que recupere la tendencia."
+        ),
+        "universo": "FIBRAs con precio > MA50 > MA200",
+        "señal": "Cruce MA50 / MA200 + distancia % sobre MA50",
     },
 }

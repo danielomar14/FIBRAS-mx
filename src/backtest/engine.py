@@ -69,20 +69,32 @@ def _execute_rebalance(
     target_weights: dict[str, float],
     prices: pd.Series,
     cash: float,
+    prices_fallback: pd.Series | None = None,
 ) -> tuple[dict[str, float], float, float]:
     """
     Ejecuta el rebalanceo: vende lo que sobra, compra lo que falta.
     Aplica comisión + slippage sobre monto operado.
+    prices_fallback: precios con ffill largo, usados para vender posiciones
+                     ilíquidas que no cotizan hoy en prices (evita pérdida de capital).
     Devuelve (new_holdings, new_cash, total_cost).
     """
+    def _price(t: str) -> float:
+        """Precio efectivo: primario o fallback; NaN si no hay ninguno."""
+        p = prices.get(t, np.nan)
+        if not np.isnan(p):
+            return p
+        if prices_fallback is not None:
+            return prices_fallback.get(t, np.nan)
+        return np.nan
+
     # Valor actual del portafolio
     portfolio_value = cash + sum(
-        holdings.get(t, 0) * prices.get(t, np.nan)
+        holdings.get(t, 0) * _price(t)
         for t in holdings
-        if not np.isnan(prices.get(t, np.nan))
+        if not np.isnan(_price(t))
     )
 
-    # Sólo FIBRAs con precio disponible hoy
+    # Sólo FIBRAs con precio disponible hoy (solo en prices primarios para comprar)
     available = {t: w for t, w in target_weights.items() if not np.isnan(prices.get(t, np.nan)) and w > 0}
     total_w = sum(available.values())
     if total_w == 0:
@@ -99,12 +111,16 @@ def _execute_rebalance(
     tickers_to_sell = set(new_holdings) - set(norm_weights)
     for t in tickers_to_sell:
         shares = new_holdings.pop(t, 0)
-        if shares > 0 and not np.isnan(prices.get(t, np.nan)):
-            exec_price = prices[t] * (1 - SLIPPAGE)
-            proceeds = shares * exec_price
-            cost = shares * prices[t] * (COMMISSION + SLIPPAGE)
+        p = _price(t)
+        if shares > 0 and not np.isnan(p):
+            # Vende al precio disponible (primario o fallback)
+            exec_price = p * (1 - SLIPPAGE)
+            proceeds   = shares * exec_price
+            cost       = shares * p * (COMMISSION + SLIPPAGE)
             cash += proceeds - cost
             total_cost += cost
+        # Si p es NaN (FIBRA deslistada sin precio conocido), la posición
+        # se elimina sin recuperar efectivo (pérdida total, caso extremo).
 
     # Luego: ajustar posiciones
     for t, tv in target_value.items():
@@ -159,14 +175,17 @@ def run_backtest(
 
     # Recortar al rango pedido
     pw = prices_wide.loc[start:end].copy()
-    # Forward fill hasta 5 días (fines de semana / feriados)
-    pw = pw.ffill(limit=5)
+    # ffill corto para trading (5 días = 1 semana hábil)
+    pw_trade = pw.ffill(limit=5)
+    # ffill largo para valuación: si una FIBRA deja de cotizar temporalmente,
+    # valorar al último precio conocido (evita colapso a $0 en gaps prolongados)
+    pw_value = pw.ffill(limit=60)
 
-    trading_days = pw.index.tolist()
+    trading_days = pw_trade.index.tolist()
     if not trading_days:
         return pd.DataFrame()
 
-    rebalance_dates = set(_rebalance_dates(pw, start, end))
+    rebalance_dates = set(_rebalance_dates(pw_trade, start, end))
 
     # Índice de dividendos para lookup rápido
     div_by_date: dict[pd.Timestamp, pd.DataFrame] = {}
@@ -181,7 +200,10 @@ def run_backtest(
     records = []
 
     for day in trading_days:
-        prices_today = pw.loc[day].dropna()
+        # prices_trade: para ejecutar operaciones (solo precios líquidos recientes)
+        prices_trade = pw_trade.loc[day].dropna()
+        # prices_val: para valuar el portafolio (usa último precio conocido si hay gap)
+        prices_val   = pw_value.loc[day].dropna()
 
         # ── Rebalanceo trimestral ─────────────────────────────────────────
         is_rebalance = day in rebalance_dates
@@ -189,12 +211,12 @@ def run_backtest(
         if is_rebalance:
             weights = strategy_fn(
                 date=day,
-                prices_wide=pw.loc[:day],
+                prices_wide=pw_trade.loc[:day],
                 dividends=dividends,
                 metrics=metrics,
                 banxico_rates=banxico_rates,
             )
-            holdings, cash, cost = _execute_rebalance(holdings, weights, prices_today, cash)
+            holdings, cash, cost = _execute_rebalance(holdings, weights, prices_trade, cash, prices_val)
 
         # ── DRIP: reinversión de dividendos ───────────────────────────────
         divs_received = 0.0
@@ -202,16 +224,15 @@ def run_backtest(
             for div_row in div_by_date[day]:
                 t   = div_row["ticker"]
                 amt = div_row["dividend"]
-                if t in holdings and t in prices_today.index and prices_today[t] > 0:
+                if t in holdings and t in prices_trade.index and prices_trade[t] > 0:
                     div_cash = holdings[t] * amt
                     divs_received += div_cash
-                    # Reinvertir: comprar más CBFIs al precio de hoy
-                    new_shares = div_cash / prices_today[t]
+                    new_shares = div_cash / prices_trade[t]
                     holdings[t] = holdings.get(t, 0) + new_shares
 
-        # ── Valor del portafolio ──────────────────────────────────────────
+        # ── Valor del portafolio (usa pw_value para no colapsar en gaps) ──
         equity = sum(
-            holdings.get(t, 0) * prices_today.get(t, 0)
+            holdings.get(t, 0) * prices_val.get(t, 0)
             for t in holdings
         )
         portfolio_value = equity + cash

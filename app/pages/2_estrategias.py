@@ -15,7 +15,7 @@ import plotly.express as px
 import streamlit as st
 
 from src.backtest.engine import run_backtest, _load_data, INITIAL_CAP
-from src.backtest.strategies import STRATEGIES, SECTOR_MAP
+from src.backtest.strategies import STRATEGIES
 from src.backtest.metrics import (
     summary, drawdown_series, annual_returns, cagr,
     annualized_volatility, max_drawdown, sharpe,
@@ -185,7 +185,7 @@ st.dataframe(styled, use_container_width=True, height=450)
 
 st.divider()
 all_codes  = list(STRATEGIES.keys())
-default_sel = ["E0", "E2", "E5", "E7", "E9"]
+default_sel = ["E0", "E5", "E9", "E11", "E12"]
 selected = st.multiselect(
     "Seleccionar estrategias a graficar",
     options=all_codes,
