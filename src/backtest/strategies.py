@@ -306,15 +306,169 @@ def e10_sector_tilt(date, prices_wide, dividends, metrics, banxico_rates):
 # ── Registro de estrategias ───────────────────────────────────────────────────
 
 STRATEGIES: dict[str, dict] = {
-    "E0":  {"fn": e0_equal_weight,      "nombre": "Equiponderada (benchmark)"},
-    "E1":  {"fn": e1_large_cap,         "nombre": "Grandes (proxy cap)"},
-    "E2":  {"fn": e2_momentum_12m,      "nombre": "Momentum 12M"},
-    "E3":  {"fn": e3_momentum_3m,       "nombre": "Momentum 3M"},
-    "E4":  {"fn": e4_low_volatility,    "nombre": "Baja volatilidad"},
-    "E5":  {"fn": e5_high_yield,        "nombre": "Alto yield"},
-    "E6":  {"fn": e6_quality_occupancy, "nombre": "Calidad (ocupación)"},
-    "E7":  {"fn": e7_value_ffo,         "nombre": "Valor (FFO yield)"},
-    "E8":  {"fn": e8_momentum_yield_combo,"nombre": "Momentum + Yield"},
-    "E9":  {"fn": e9_anti_momentum,     "nombre": "Contrarian"},
-    "E10": {"fn": e10_sector_tilt,      "nombre": "Rotación sectorial"},
+    "E0": {
+        "fn": e0_equal_weight,
+        "nombre": "Naive 1/N",
+        "categoria": "Pasiva",
+        "descripcion": (
+            "Divide el capital en partes iguales entre todas las FIBRAs "
+            "disponibles en cada fecha de rebalanceo. Es el punto de partida "
+            "clásico de la literatura (DeMiguel et al., 2009): ningún modelo "
+            "cuantitativo debería rendir menos que esta estrategia ingénua. "
+            "**Sirve como referencia interna** para juzgar si las demás "
+            "estrategias agregan valor real."
+        ),
+        "universo": "Todas las disponibles",
+        "señal": "Ninguna — pesos fijos 1/N",
+    },
+    "E1": {
+        "fn": e1_large_cap,
+        "nombre": "Por tamaño (proxy cap)",
+        "categoria": "Pasiva",
+        "descripcion": (
+            "Pondera cada FIBRA proporcionalmente a su precio promedio de los "
+            "últimos 30 días hábiles, usado como proxy del tamaño de mercado. "
+            "FIBRAs más grandes (FUNO11, FIBRAPL14) reciben mayor peso. "
+            "Replica el concepto de un índice ponderado por capitalización, "
+            "similar al IPC pero dentro del universo FIBRA."
+        ),
+        "universo": "Todas las disponibles",
+        "señal": "Precio promedio 30d como proxy de market cap",
+    },
+    "E2": {
+        "fn": e2_momentum_12m,
+        "nombre": "Momentum 12M",
+        "categoria": "Tendencial",
+        "descripcion": (
+            "Selecciona las **5 FIBRAs con mayor retorno de precio en los "
+            "últimos 12 meses** y las pondera en igual peso. Se basa en el "
+            "efecto momentum documentado en acciones y REITs: los ganadores "
+            "recientes tienden a seguir ganando en el corto plazo. "
+            "Se excluye el último mes para evitar el sesgo de reversión "
+            "a muy corto plazo (though in practice we use full 252-day window)."
+        ),
+        "universo": "Top 5 por retorno 12M",
+        "señal": "Retorno precio trailing 252 días hábiles",
+    },
+    "E3": {
+        "fn": e3_momentum_3m,
+        "nombre": "Momentum 3M",
+        "categoria": "Tendencial",
+        "descripcion": (
+            "Igual que E2 pero con ventana de **3 meses (63 días hábiles)**. "
+            "Captura tendencias de corto plazo. En mercados con poca liquidez "
+            "como las FIBRAs mexicanas, el ruido supera la señal a esta "
+            "escala temporal, lo que genera rotación excesiva y altos costos "
+            "de transacción."
+        ),
+        "universo": "Top 5 por retorno 3M",
+        "señal": "Retorno precio trailing 63 días hábiles",
+    },
+    "E4": {
+        "fn": e4_low_volatility,
+        "nombre": "Baja volatilidad",
+        "categoria": "Factor",
+        "descripcion": (
+            "Selecciona las **5 FIBRAs con menor volatilidad realizada en los "
+            "últimos 12 meses** (desviación estándar anualizada de retornos "
+            "diarios). La anomalía de baja volatilidad, documentada globalmente, "
+            "sugiere que activos menos volátiles ofrecen mejor Sharpe ajustado. "
+            "En el contexto FIBRA esto favorece propiedades industriales y "
+            "de almacenaje frente a hoteleras."
+        ),
+        "universo": "Top 5 por menor vol 12M",
+        "señal": "Vol realizada anualizada (σ × √252)",
+    },
+    "E5": {
+        "fn": e5_high_yield,
+        "nombre": "Alto yield",
+        "categoria": "Factor",
+        "descripcion": (
+            "Selecciona las **5 FIBRAs con mayor yield de distribuciones** "
+            "(suma de dividendos pagados en los últimos 12 meses / precio actual). "
+            "La tesis es que las FIBRAs están obligadas a distribuir ≥95% del "
+            "FFO, por lo que un yield alto señala generación de caja real, "
+            "no solo apreciación de precio. Favorece FIBRAs con alta ocupación "
+            "y contratos estables."
+        ),
+        "universo": "Top 5 por yield TTM",
+        "señal": "Dividendos 12M / precio actual",
+    },
+    "E6": {
+        "fn": e6_quality_occupancy,
+        "nombre": "Calidad (ocupación)",
+        "categoria": "Fundamental",
+        "descripcion": (
+            "Selecciona las **5 FIBRAs con mayor tasa de ocupación de portafolio** "
+            "reportada en el último trimestre disponible (fuente: FibrasMX / "
+            "reportes trimestrales). Alta ocupación → ingresos estables → "
+            "distribuciones predecibles. Tiene el sesgo de datos lentos: "
+            "la métrica trimestral puede tener rezago de hasta 90 días."
+        ),
+        "universo": "Top 5 por ocupación último trimestre",
+        "señal": "Occupancy rate (%) de métricas trimestrales",
+    },
+    "E7": {
+        "fn": e7_value_ffo,
+        "nombre": "Valor (FFO yield)",
+        "categoria": "Fundamental",
+        "descripcion": (
+            "Selecciona las **5 FIBRAs con mayor FFO yield** (FFO por CBFI × 4 "
+            "anualizado / precio actual). El FFO (Funds From Operations) es el "
+            "equivalente del P/E para FIBRAs: el precio sobre el flujo operativo "
+            "real. Un FFO yield alto implica que el mercado paga poco por cada "
+            "peso de flujo generado, lo que indica posible subvaluación. "
+            "Limitado por gaps en datos trimestrales para FIBRAs pequeñas."
+        ),
+        "universo": "Top 5 por FFO yield",
+        "señal": "FFO por CBFI × 4 / precio actual",
+    },
+    "E8": {
+        "fn": e8_momentum_yield_combo,
+        "nombre": "Momentum + Yield",
+        "categoria": "Multi-factor",
+        "descripcion": (
+            "Combina dos señales: **momentum de 6 meses** y **yield TTM**, "
+            "con peso 50/50. Se rankean todas las FIBRAs disponibles en cada "
+            "señal (rango normalizado 0–1) y se suman los ranks. Las top 5 "
+            "por score compuesto entran con pesos iguales. Busca FIBRAs que "
+            "simultáneamente han tenido buen desempeño de precio reciente "
+            "y pagan buenas distribuciones."
+        ),
+        "universo": "Top 5 por score compuesto",
+        "señal": "Rank(momentum 6M) × 0.5 + Rank(yield TTM) × 0.5",
+    },
+    "E9": {
+        "fn": e9_anti_momentum,
+        "nombre": "Contrarian (anti-momentum)",
+        "categoria": "Contraria",
+        "descripcion": (
+            "Selecciona las **5 FIBRAs con peor retorno en los últimos 12 "
+            "meses** (lo opuesto a E2). La tesis es la reversión a la media: "
+            "activos que han caído significativamente tienden a recuperarse "
+            "en el siguiente período. Esto funciona mejor en mercados ilíquidos "
+            "donde el overshooting es común. En el backtest 2018–2025 es la "
+            "estrategia con mejor CAGR (12.9%), impulsado por la recuperación "
+            "post-COVID de hoteleras que fueron las más golpeadas."
+        ),
+        "universo": "Top 5 peores performers 12M",
+        "señal": "Retorno trailing 252d (inverso al de E2)",
+    },
+    "E10": {
+        "fn": e10_sector_tilt,
+        "nombre": "Rotación sectorial",
+        "categoria": "Macro",
+        "descripcion": (
+            "Ajusta los pesos por sector según la **dirección de la tasa "
+            "objetivo de Banxico** en los últimos 6 meses: "
+            "• Tasas subiendo → sobreponderar industrial (2×), reducir hotelero (0.5×). "
+            "Las FIBRAs industriales tienen contratos dolarizados y rentas indexadas, "
+            "más resistentes a inflación. "
+            "• Tasas bajando → sobreponderar hotelero y comercial (1.5×), que se "
+            "benefician de menor costo de financiamiento. "
+            "• Estable → igual que E0."
+        ),
+        "universo": "Todas, con pesos diferenciados por sector",
+        "señal": "Cambio tasa Banxico últimos 6 meses (±0.25%)",
+    },
 }
