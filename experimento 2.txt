@@ -1,0 +1,187 @@
+Necesito implementar un algoritmo genético que encuentre la estrategia óptima 
+de inversión en FIBRAs mexicanas. Esto es la continuación de un proyecto 
+donde ya implementé 11 estrategias deterministas (10 + benchmark aleatorio) 
+en el mismo repositorio.
+
+PRERREQUISITO
+Reutiliza el motor de backtest, el data_loader y el módulo de métricas del 
+proyecto anterior. Si encuentras inconsistencias o falta refactor, hazlo.
+
+OBJETIVO
+Encontrar la combinación de FIBRAs, pesos y reglas de compra/venta que 
+maximice una función de fitness multi-objetivo. La estrategia ganadora debe 
+ser robusta (no overfitted), con buen retorno ajustado por riesgo, drawdowns 
+contenidos y flujo de distribuciones consistente.
+
+SETUP DEL PROBLEMA
+- Mismas restricciones del experimento anterior: $200k MXN, 5-15 FIBRAs, 
+  pesos en [5%, 30%], rebalanceo trimestral, DRIP 100%, comisión 0.25%.
+- Universo de 15 FIBRAs activas (mismas que antes).
+- Datos: los mismos del experimento 1.
+
+CODIFICACIÓN DEL CROMOSOMA
+Cada individuo tiene aproximadamente 30 genes en 4 bloques:
+
+Bloque A - Selección y pesos:
+  - n: número de FIBRAs en el portafolio, entero en [5, 15].
+  - b_i: 15 binarios, uno por FIBRA. Restricción sum(b_i) = n.
+  - w_i: 15 reales en [0.05, 0.30]. Solo aplican los w_i donde b_i = 1. 
+    Restricción sum(w_i activos) = 1.
+
+Bloque B - Reglas de compra (umbrales de entrada):
+  - theta_ocup_compra:    real en [85, 99]   (% ocupación mínima)
+  - theta_LTV_compra:     real en [25, 50]   (% LTV máximo)
+  - theta_payout_compra:  real en [50, 95]   (% payout máximo)
+  - theta_yield_compra:   real en [4, 12]    (% yield mínimo)
+  - theta_PNAV_compra:    real en [0.6, 1.5] (P/NAV máximo)
+
+Bloque C - Reglas de venta:
+  - theta_ocup_venta:     real en [70, 95]
+  - theta_LTV_venta:      real en [35, 60]
+  - theta_PNAV_venta:     real en [0.9, 2.0]
+  - theta_stop_loss:      real en [-25, -5]  (%)
+  - theta_take_profit:    real en [10, 50]   (%)
+
+Bloque D - Hiperparámetros operativos:
+  - frecuencia_rebalanceo: categórico en {mensual, trimestral, semestral, anual}
+  - rho_drift:             real en [2, 15]   (% tolerancia al drift de pesos)
+  - delta_DRIP:            real en [0, 1]    (fracción reinvertida)
+
+Implementa una función decode(cromosoma) -> estrategia ejecutable que el motor 
+de backtest del experimento 1 pueda correr.
+
+FUNCIÓN DE FITNESS
+F = 0.40 * Sharpe + 0.25 * Calmar + 0.20 * Consistencia - 0.15 * Penalizaciones - lambda * Complejidad
+
+Donde:
+- Sharpe = (CAGR - Rf) / sigma_anualizada. Rf = CETES 1 año promedio del 
+  período. Si no tienes el dato, usa 7.5% como default y documéntalo.
+- Calmar = CAGR / abs(MaxDrawdown).
+- Consistencia = (% trimestres con flujo > 0) * (% meses sin pérdida en valor 
+  del portafolio). Ambos en escala 0-1.
+- Penalizaciones: -1 por cada violación: concentración > 30%, vol > 20%, 
+  DD < -30%, n < 5, n > 15.
+- Complejidad = número de reglas activas (cada filtro contribuye 1). 
+  lambda = 0.02 por defecto.
+
+Normaliza Sharpe y Calmar para que estén en rangos comparables (típicamente 
+0-3). Una propuesta: si Sharpe > 3, satura en 3.
+
+OPERADORES GENÉTICOS
+
+Inicialización:
+- Población P = 500 individuos.
+- 250 con warm start: 25 individuos por cada estrategia E1-E10 con pequeñas 
+  perturbaciones gaussianas en los umbrales.
+- 250 aleatorios uniformes que respeten las restricciones.
+
+Selección: torneo de tamaño k=5.
+
+Cruzamiento (crossover):
+- Bloque A binario: cruzamiento uniforme.
+- Bloque A pesos: promedio + ruido gaussiano (sigma = 0.02), respetando 
+  [0.05, 0.30].
+- Bloques B, C, D reales: SBX con eta_c = 15.
+- Probabilidad p_c = 0.85.
+
+Mutación:
+- Genes binarios: bit-flip con p_m = 1/15.
+- Genes reales: mutación polinomial con eta_m = 20.
+- Después de mutar: reparar (renormalizar pesos, ajustar n al rango, 
+  asegurar que los umbrales de venta sean más laxos que los de compra).
+
+Elitismo: top-10 individuos pasan sin cambios a la siguiente generación.
+
+Criterio de paro:
+- Máximo 200 generaciones.
+- Early stopping: si el mejor fitness no mejora en 25 generaciones, salir.
+
+VALIDACIÓN ANTI-OVERFITTING (CRÍTICO)
+Esta sección no es opcional. Sin ella, el GA va a sobre-ajustar y los 
+resultados serán falsos.
+
+1. Train/Validation/Test temporal:
+   - Train: 2016-01-01 a 2021-12-31.
+   - Validation: 2022-01-01 a 2023-12-31.
+   - Test: 2024-01-01 a 2025-12-31.
+   El GA optimiza fitness sobre Train. Selecciona el mejor individuo por 
+   fitness en Validation. Reporta KPIs finales en Test.
+
+2. Walk-forward analysis: una vez convergido el GA en el split anterior, 
+   corre 5 ventanas adicionales (años de inicio 2016, 2017, 2018, 2019, 
+   2020) cada una con 4 años de train + 2 de test. Reporta el promedio y 
+   desviación estándar del fitness out-of-sample.
+
+3. Bootstrap robustness: con la mejor solución, evalúa fitness sobre 100 
+   bootstrap resamples (bloques de 30 días para preservar autocorrelación) 
+   de la serie de retornos. La solución debe estar en el top-10% en al 
+   menos 80 de las 100 muestras.
+
+4. Comparación obligatoria contra E1 (Equiponderada): si el mejor individuo 
+   no supera a E1 en el conjunto de Test por al menos +0.20 puntos de 
+   Sharpe, declara que el GA no encontró una solución generalizable y 
+   recomienda E1.
+
+ENTREGABLES
+1. Código modular:
+   - src/genetic/
+     - chromosome.py     (codificación, decode, validación)
+     - operators.py      (selección, crossover, mutación, reparación)
+     - fitness.py        (función de fitness)
+     - ga.py             (loop principal del GA)
+     - validation.py     (walk-forward, bootstrap)
+   - main_ga.py
+2. Logs de cada generación: mejor fitness, fitness promedio, diversidad.
+3. Visualizaciones:
+   - Curva de convergencia (fitness vs generación).
+   - Diversidad de la población a lo largo del tiempo.
+   - Heatmap de qué FIBRAs aparecen en los individuos del top-10% por 
+     generación (te dice si el GA está descubriendo señal o ruido).
+   - Equity curve del individuo ganador vs E1 vs el mejor del experimento 1.
+4. Reporte del individuo ganador:
+   - Cromosoma completo decodificado en lenguaje natural.
+   - KPIs en Train, Validation, Test.
+   - Resultado del walk-forward (5 ventanas).
+   - Resultado del bootstrap (% de muestras donde está en top-10%).
+   - Comparación contra E1 y contra el ganador del experimento 1.
+
+LIBRERÍAS SUGERIDAS
+- DEAP o PyGAD para el GA. DEAP es más flexible, PyGAD más simple. Tú 
+  decides según veas el proyecto.
+- joblib o multiprocessing para paralelizar la evaluación de fitness (cada 
+  individuo en un core distinto). Esto es crítico: con 500 individuos x 200 
+  generaciones x 10 años de backtest, sin paralelización es inviable.
+- Reutiliza pandas, numpy, matplotlib del experimento 1.
+
+PRESUPUESTO COMPUTACIONAL
+Estima al inicio cuántos minutos toma evaluar 1 individuo. Multiplica por 
+500 * 200 / num_cores. Si supera 4 horas, simplifica:
+- Reduce población a 200.
+- Reduce generaciones a 100.
+- Cachea resultados de backtests con cromosomas idénticos (puede haber 
+  duplicados).
+
+ANTES DE EMPEZAR
+1. Confirma que el motor de backtest del experimento 1 es lo suficientemente 
+   rápido como para correr cientos de miles de evaluaciones. Si no, 
+   optimízalo con vectorización en numpy/pandas o numba antes de iniciar 
+   el GA.
+2. Si los datos fundamentales (ocupación, LTV, payout, NAV) no están 
+   completos, simplifica los bloques B y C del cromosoma a solo los 
+   umbrales viables y documenta la limitación.
+3. Antes de la corrida final, haz una corrida corta (50 individuos, 30 
+   generaciones) para verificar que todo el pipeline funciona end-to-end.
+
+REGLAS DE HONESTIDAD
+- Si el GA no supera al benchmark E1 en out-of-sample, dilo. No tortures 
+  los hiperparámetros hasta que dé un número bonito.
+- Reporta SIEMPRE los resultados en Test, no en Train. Los de Train solo 
+  son referencia.
+- Si encuentras que el GA siempre converge a la misma solución 
+  independientemente de la inicialización, eso es buena señal (señal 
+  fuerte). Si converge a soluciones distintas en cada corrida, eso es mala 
+  señal (overfitting o función de fitness mal especificada).
+
+Empieza por verificar el motor de backtest, después implementa la codificación 
+y la fitness con tests unitarios mínimos. Después el GA. Y al final la 
+validación. No saltes pasos.

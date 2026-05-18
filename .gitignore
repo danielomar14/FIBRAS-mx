@@ -20,6 +20,9 @@ __pycache__/
 # Scripts temporales de exploración
 scripts/
 
+# ML caches
+catboost_info/
+
 # macOS
 .DS_Store
 

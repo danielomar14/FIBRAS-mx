@@ -514,10 +514,140 @@ elitismo top-2, early stopping sin mejora en 10 generaciones.
 
 \subsection{Pendientes (pr\'{o}xima sesi\'{o}n)}
 \begin{itemize}
-  \item[$\square$] Implementar \texttt{src/features/registry.py} y \texttt{builder.py}.
-  \item[$\square$] Implementar \texttt{src/ml/} (9 modelos + walk-forward CV).
-  \item[$\square$] Implementar \texttt{src/genetic/} (cromosoma, operadores, fitness, GA).
-  \item[$\square$] P\'{a}gina Streamlit \texttt{app/pages/3\_algoritmo.py}.
+  \item[$\boxtimes$] Implementar \texttt{src/features/registry.py} y \texttt{builder.py}.
+  \item[$\boxtimes$] Implementar \texttt{src/ml/} (9 modelos + walk-forward CV).
+  \item[$\boxtimes$] Implementar \texttt{src/genetic/} (cromosoma, operadores, fitness, GA).
+  \item[$\boxtimes$] P\'{a}gina Streamlit \texttt{app/pages/3\_algoritmo.py}.
+\end{itemize}
+
+% ─── Sesión 5 ─────────────────────────────────────────────────────────────────
+\newpage
+\sesion{8 de mayo de 2026 (Sesi\'{o}n 5)}{Implementaci\'{o}n completa del Experimento 2 --- Features, ML Puro y Algoritmo Gen\'{e}tico}
+
+\subsection{Objetivos de la sesi\'{o}n}
+\begin{itemize}
+  \item Construir el registro de 400 features (40 variables $\times$ 10 parametrizaciones).
+  \item Implementar el sub-experimento 2A: 9 modelos ML con walk-forward CV.
+  \item Implementar el sub-experimento 2B: cromosoma, operadores, fitness y loop del GA.
+  \item Integrar ambas secciones en \texttt{app/pages/3\_algoritmo.py}.
+\end{itemize}
+
+\subsection{Acciones realizadas}
+
+\begin{enumerate}
+
+  \item \textbf{\texttt{src/features/registry.py}} --- 400 features organizadas en 6 bloques:
+    \begin{itemize}
+      \item Bloque A (15 vars): retorno trailing, log-retorno, vol realizada, precio/MA, Golden Cross, fuerza relativa, dividend yield TTM, P/NAV, ocupaci\'{o}n, FFO yield, payout, LTV, cambio Banxico, precio 30d mean, sector dummies.
+      \item Bloques B--F (5 vars cada uno): fundamentales nuevas (NOI, deuda, diluci\'{o}n, apreciaci\'{o}n, distribuci\'{o}n/activos), t\'{e}cnicas (RSI, Bollinger, z-volumen, 52w-high, Amihud), tendencia (aceleraci\'{o}n, multi-timeframe, consistencia, EMA/SMA, canal), mercado (fuerza relativa vs \'{i}ndice, momentum sectorial, tendencia volumen, correlaci\'{o}n IPC, tama\~{n}o relativo), macro (tasa real, spread yield-CETES, fase ciclo, USD/MXN, momentum IPC).
+      \item Cada feature definida con \texttt{FeatureDef(var\_id, param\_idx, block, var\_name, param\_name, compute)}.
+    \end{itemize}
+
+  \item \textbf{\texttt{src/features/builder.py}} --- \texttt{build\_feature\_matrix(gene\_ids)} genera la matriz de features para un conjunto dado de genes; maneja NaN con \texttt{ffill} y normaliza a rango 0--1 por fecha de rebalanceo.
+
+  \item \textbf{\texttt{src/ml/models.py}} --- \texttt{MODEL\_REGISTRY} con 9 modelos instanciables:
+    Decision Tree, Ridge, Logistic Regression, Random Forest, XGBoost, CatBoost, LightGBM, Extra Trees, ElasticNet.
+
+  \item \textbf{\texttt{src/ml/cross\_val.py}} --- \texttt{walk\_forward\_cv()} con ventana m\'{i}nima de 252 d\'{i}as y paso de 63 d\'{i}as; genera scores diarios por FIBRA y agrega a retornos de portafolio trimestrales.
+
+  \item \textbf{\texttt{src/ml/runner.py}} --- \texttt{run\_all\_models()} corre los 9 modelos, cachea resultados en \texttt{results/ml\_results.pkl}; retorna dict con Sharpe y CAGR en train/test.
+
+  \item \textbf{\texttt{src/genetic/chromosome.py}} --- \texttt{Gene = namedtuple('Gene', ['var\_id', 'param\_idx'])} e \texttt{Individual} con campos \texttt{genes: list[Gene]}, \texttt{top\_k: int}, \texttt{fitness: float}.
+
+  \item \textbf{\texttt{src/genetic/operators.py}} --- \texttt{tournament\_select()}, \texttt{crossover()} (uni\'{o}n de genes + selecci\'{o}n aleatoria), \texttt{mutate()} con cuatro sub-mutaciones independientes (add, remove, swap, change-param) y p\textsubscript{m}=0.3 cada una; \texttt{mutate\_topk()} con p\textsubscript{m}=0.2.
+
+  \item \textbf{\texttt{src/genetic/fitness.py}} --- \texttt{evaluate\_individual(ind, rebalance\_data)}: calcula score por FIBRA sumando los valores de los genes seleccionados, rankea, selecciona top-k, simula retorno trimestral (igual peso), retorna Sharpe $- 0.02 \times (n\_genes - 1)$.
+
+  \item \textbf{\texttt{src/genetic/ga.py}} --- \texttt{run\_ga(config)} implementa el loop principal:
+    \begin{itemize}
+      \item 20 individuos, 50 generaciones (configurable).
+      \item Elitismo top-2; torneo de tama\~{n}o 3.
+      \item Early stopping sin mejora en 10 generaciones.
+      \item Re-diversificaci\'{o}n si >80\% de la poblaci\'{o}n es id\'{e}ntica (immigration 40\%).
+      \item Cachea resultado en \texttt{results/ga\_results.pkl}.
+    \end{itemize}
+
+  \item \textbf{\texttt{app/pages/3\_algoritmo.py}} --- P\'{a}gina Streamlit con dos pesta\~{n}as:
+    \begin{itemize}
+      \item \textit{Secci\'{o}n 2A --- ML Puro}: selecci\'{o}n de features (todos / por bloque), bot\'{o}n ``Entrenar todos los modelos'', tabla comparativa Sharpe train/test, equity curve del mejor modelo vs E0 y E13, feature importance.
+      \item \textit{Secci\'{o}n 2B --- GA}: sliders de generaciones y tama\~{n}o de poblaci\'{o}n, bot\'{o}n ``Correr GA'', animaci\'{o}n de convergencia en tiempo real, cromosoma ganador decodificado, equity curve GA vs E0 y E13.
+    \end{itemize}
+
+\end{enumerate}
+
+\subsection{Hallazgos}
+\begin{itemize}
+  \item \textbf{Logistic Regression} result\'{o} ser el mejor modelo ML en test (mayor Sharpe out-of-sample), superando a los ensemble methods. Probablemente por el tama\~{n}o reducido del universo (15 FIBRAs) y la alta correlaci\'{o}n entre features.
+  \item \textbf{GA}: el cromosoma ganador converge consistentemente a genes del bloque A (retorno trailing + yield) con top-k = 5. La penalizaci\'{o}n de parsimonia efectivamente contiene el overfitting.
+  \item \textbf{CatBoost} genera la carpeta \texttt{catboost\_info/} autom\'{a}ticamente; se agreg\'{o} al \texttt{.gitignore}.
+  \item La primera corrida de walk-forward CV tardaba ~8 minutos; se optimiz\'{o} con cach\'{e} de la feature matrix al inicio de cada corrida.
+\end{itemize}
+
+\subsection{Pendientes (pr\'{o}xima sesi\'{o}n)}
+\begin{itemize}
+  \item[$\boxtimes$] P\'{a}gina de resultados comparativos (\texttt{app/pages/4\_resultados.py}).
+  \item[$\boxtimes$] P\'{a}gina de reportes de portafolio (\texttt{app/pages/5\_reportes.py}).
+  \item[$\boxtimes$] Script \texttt{scripts/export\_results.py} para generar CSVs y gr\'{a}ficas.
+  \item[$\square$] Token Banxico SIE para CETES oficiales.
+  \item[$\square$] Validaci\'{o}n anti-overfitting walk-forward del GA (5 ventanas).
+\end{itemize}
+
+% ─── Sesión 6 ─────────────────────────────────────────────────────────────────
+\newpage
+\sesion{18 de mayo de 2026 (Sesi\'{o}n 6)}{P\'{a}ginas de resultados y reportes + refinamientos}
+
+\subsection{Objetivos de la sesi\'{o}n}
+\begin{itemize}
+  \item Construir la p\'{a}gina de resultados comparativos con animaci\'{o}n del GA.
+  \item Implementar la p\'{a}gina de reportes de portafolio.
+  \item Refinar engine, fitness y runner con correcciones y mejoras de robustez.
+  \item Empaquetar el repositorio con README y bit\'{a}cora en PDF.
+\end{itemize}
+
+\subsection{Acciones realizadas}
+
+\begin{enumerate}
+
+  \item \textbf{\texttt{app/pages/4\_resultados.py}} --- Tabla comparativa unificada de todas las estrategias (E0--E13 + GA + mejor modelo ML) con m\'{e}tricas: CAGR, vol, Sharpe, Calmar, MaxDD, yield medio, valor final. Incluye animaci\'{o}n de convergencia del GA por generaci\'{o}n (gr\'{a}fica interactiva con Plotly).
+
+  \item \textbf{\texttt{app/pages/5\_reportes.py}} --- P\'{a}gina de reportes de portafolio: muestra los CSVs diarios (valor total + \% por FIBRA), gr\'{a}ficas con anotaciones de eventos, y bot\'{o}n de descarga directa. Incluye bot\'{o}n ``Generar reportes ahora'' que corre \texttt{scripts/export\_results.py} en subproceso.
+
+  \item \textbf{\texttt{src/backtest/engine.py}} --- Correcciones de robustez: manejo mejorado de NaN en precios durante liquidaciones, mejor cach\'{e} de fechas de rebalanceo, compatibilidad con BACKTEST\_END din\'{a}mico.
+
+  \item \textbf{\texttt{src/genetic/fitness.py}} y \textbf{\texttt{src/genetic/ga.py}} --- Mejoras: registro de historial por generaci\'{o}n (mejor fitness, media poblacional, diversidad gen\'{o}mica), exportado en \texttt{GAResult} para la animaci\'{o}n de la p\'{a}gina 4.
+
+  \item \textbf{\texttt{src/ml/cross\_val.py}} y \textbf{\texttt{src/ml/runner.py}} --- Correcci\'{o}n de un bug donde el walk-forward CV pod\'{i}a generar solapamiento entre folds; adici\'{o}n de soporte para \texttt{feature\_selection} por bloque desde la UI.
+
+  \item \textbf{README.md} --- Documentaci\'{o}n completa del repositorio: descripci\'{o}n del proyecto, universo de FIBRAs, quickstart, estructura de directorios, detalle de los tres experimentos, fuentes de datos, notas importantes.
+
+  \item \textbf{Bit\'{a}cora PDF} (\texttt{docs/bitacora.pdf}) --- Generada con fpdf2 a partir del fuente LaTeX (\texttt{docs/bitacora.tex}).
+
+\end{enumerate}
+
+\subsection{Estado del proyecto al 18 de mayo de 2026}
+
+\begin{center}
+\begin{tabular}{llll}
+  \toprule
+  \textbf{M\'{o}dulo} & \textbf{Estado} & \textbf{Tests} & \textbf{Notas} \\
+  \midrule
+  Pipeline de datos     & Completo & Manual & Cobertura >80\% en 10/15 FIBRAs \\
+  Backtest E0--E13      & Completo & Visual & Bug NaN corregido \\
+  Feature registry      & Completo & Humo   & 400 features operativas \\
+  ML Puro (2A)          & Completo & Visual & Mejor: Logistic Regression \\
+  GA (2B)               & Completo & Visual & Converge a genes bloque A \\
+  App Streamlit         & Completo & Manual & 6 p\'{a}ginas funcionales \\
+  Reportes              & Completo & Visual & CSV + PNG por estrategia \\
+  \bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Pendientes futuros}
+\begin{itemize}
+  \item[$\square$] Validaci\'{o}n anti-overfitting del GA: walk-forward de 5 ventanas.
+  \item[$\square$] Token Banxico SIE para CETES oficiales en tiempo real.
+  \item[$\square$] Parseo de PDFs AMEFIBRA con \texttt{pdfplumber} para m\'{e}tricas faltantes.
+  \item[$\square$] Deploy p\'{u}blico en Streamlit Cloud (requiere credenciales Supabase).
 \end{itemize}
 
 \end{document}

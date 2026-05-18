@@ -47,6 +47,8 @@ class GAResult:
     val_metrics:          dict
     var_frequency:        dict[int, int]          = field(default_factory=dict)
     history_populations:  list[list[float]]       = field(default_factory=list)
+    full_metrics:         dict                    = field(default_factory=dict)   # 2021-2026
+    full_details:         "pd.DataFrame"          = field(default_factory=pd.DataFrame)  # tickers por fecha
 
 
 def _load_prices_wide() -> pd.DataFrame:
@@ -84,15 +86,17 @@ def run_ga(
         np.random.seed(seed)
 
     log.info("Cargando datos para GA…")
-    fm_train = load_and_build(start=TRAIN_START, end=TRAIN_END)
-    fm_all   = load_and_build()  # Para test + val
+    # Construir fm_all una sola vez con historia completa; la misma matrix se usa
+    # para fitness en train (rebalance restringido a TRAIN) y para test/val.
+    # Esto garantiza que los features sean consistentes entre entrenamiento y evaluación.
+    fm_all      = load_and_build()
     prices_wide = _load_prices_wide()
 
     # ── Inicialización ────────────────────────────────────────────────────────
     population: list[Individual] = [random_individual() for _ in range(population_size)]
 
     for ind in population:
-        ind.fitness = evaluate_individual(ind, fm_train, prices_wide, TRAIN_START, TRAIN_END)
+        ind.fitness = evaluate_individual(ind, fm_all, prices_wide, TRAIN_START, TRAIN_END)
 
     history_best:        list[float]       = []
     history_mean:        list[float]       = []
@@ -133,7 +137,7 @@ def run_ga(
             n_immigrants = population_size // 3
             immigrants = [random_individual() for _ in range(n_immigrants)]
             for ind in immigrants:
-                ind.fitness = evaluate_individual(ind, fm_train, prices_wide, TRAIN_START, TRAIN_END)
+                ind.fitness = evaluate_individual(ind, fm_all, prices_wide, TRAIN_START, TRAIN_END)
             population = sorted(population, key=lambda x: x.fitness, reverse=True)[:population_size - n_immigrants]
             population += immigrants
 
@@ -146,7 +150,7 @@ def run_ga(
             p2 = tournament_select(population, k=tournament_k)
             child = crossover(p1, p2)
             child = mutate(child)
-            child.fitness = evaluate_individual(child, fm_train, prices_wide, TRAIN_START, TRAIN_END)
+            child.fitness = evaluate_individual(child, fm_all, prices_wide, TRAIN_START, TRAIN_END)
             new_pop.append(child)
 
         population = new_pop
@@ -162,9 +166,11 @@ def run_ga(
 
     # Métricas en todos los períodos
     best_ind = max(population, key=lambda x: x.fitness)
-    train_met = evaluate_period(best_ind, fm_train, prices_wide, TRAIN_START, TRAIN_END)
-    test_met  = evaluate_period(best_ind, fm_all,   prices_wide, TEST_START,  TEST_END)
-    val_met   = evaluate_period(best_ind, fm_all,   prices_wide, VAL_START,   VAL_END)
+    train_met = evaluate_period(best_ind, fm_all, prices_wide, TRAIN_START, TRAIN_END)
+    test_met  = evaluate_period(best_ind, fm_all, prices_wide, TEST_START,  TEST_END)
+    val_met   = evaluate_period(best_ind, fm_all, prices_wide, VAL_START,   VAL_END)
+    # Evaluación completa desde 2021 para la página de Resultados (curva comparable)
+    full_met  = evaluate_period(best_ind, fm_all, prices_wide, "2021-01-01", VAL_END)
 
     result = GAResult(
         best_individual=best_ind,
@@ -176,6 +182,8 @@ def run_ga(
         val_metrics=val_met,
         var_frequency=var_freq,
         history_populations=history_populations,
+        full_metrics=full_met,
+        full_details=full_met.get("details", pd.DataFrame()),
     )
 
     with open(cache_path, "wb") as f:

@@ -180,11 +180,15 @@ def run_backtest(
     dividends: pd.DataFrame | None   = None,
     metrics: pd.DataFrame | None     = None,
     banxico_rates: pd.DataFrame | None = None,
-) -> pd.DataFrame:
+    return_positions: bool = False,
+) -> pd.DataFrame | tuple[pd.DataFrame, pd.DataFrame]:
     """
     Corre el backtest de una estrategia. Devuelve DataFrame con columnas:
         date, portfolio_value, cash, invested_capital, n_positions,
         rebalance, contribution, dividends_received, cost
+
+    Si return_positions=True, devuelve (df, pos_df) donde pos_df tiene
+    columnas {ticker}_mxn y efectivo_mxn por día hábil.
 
     monthly_contribution: monto en MXN que se inyecta el primer día hábil
         de cada mes (simula aportación periódica). Se suma al cash y se
@@ -199,7 +203,7 @@ def run_backtest(
 
     trading_days = pw_trade.index.tolist()
     if not trading_days:
-        return pd.DataFrame()
+        return (pd.DataFrame(), pd.DataFrame()) if return_positions else pd.DataFrame()
 
     rebalance_dates  = set(_rebalance_dates(pw_trade, start, end))
     contribution_map = _monthly_contribution_dates(trading_days, monthly_contribution)
@@ -215,6 +219,7 @@ def run_backtest(
     cash            = float(initial_capital)
     invested_capital = float(initial_capital)
     records = []
+    pos_records = []
 
     for day in trading_days:
         prices_trade = pw_trade.loc[day].dropna()
@@ -254,10 +259,13 @@ def run_backtest(
                     holdings[t] = holdings.get(t, 0) + new_shares
 
         # ── Valor del portafolio ──────────────────────────────────────────
-        equity = sum(
-            holdings.get(t, 0) * prices_val.get(t, 0)
-            for t in holdings
-        )
+        fibra_vals: dict[str, float] = {}
+        equity = 0.0
+        for t, shares in holdings.items():
+            p = prices_val.get(t, 0)
+            val = shares * p
+            fibra_vals[t] = val
+            equity += val
         portfolio_value = equity + cash
 
         records.append({
@@ -272,6 +280,11 @@ def run_backtest(
             "cost":               cost,
         })
 
+        if return_positions:
+            pos_row = {"date": day, "efectivo_mxn": cash}
+            pos_row.update({f"{t}_mxn": v for t, v in fibra_vals.items()})
+            pos_records.append(pos_row)
+
     df = pd.DataFrame(records).set_index("date")
     total_invested = df["invested_capital"].iloc[-1]
     total_return = (df["portfolio_value"].iloc[-1] / total_invested - 1) * 100
@@ -280,4 +293,8 @@ def run_backtest(
         f"${df['portfolio_value'].iloc[-1]:,.0f} MXN "
         f"(aportado ${total_invested:,.0f}, retorno total {total_return:.1f}%)"
     )
+
+    if return_positions:
+        pos_df = pd.DataFrame(pos_records).set_index("date").fillna(0.0)
+        return df, pos_df
     return df

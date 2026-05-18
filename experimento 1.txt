@@ -1,0 +1,134 @@
+Necesito implementar un backtest comparativo de 11 estrategias de inversión 
+sobre FIBRAs mexicanas (10 estrategias deterministas + 1 benchmark aleatorio).
+
+CONTEXTO Y SETUP
+- Capital inicial: $200,000 MXN.
+- Universo invertible: 15 FIBRAs activas en BMV/BIVA: FUNO11, FIBRAPL14, 
+  FMTY14, DANHOS13, FSHOP13, FNOVA17, FINN13, FIHO12, FIBRAUP18, FPLUS16, 
+  STORAGE18, FSITES20, EDUCA18, NEXT25, FMX23.
+- Restricciones de portafolio:
+    * Mínimo 5 FIBRAs, máximo 15.
+    * Peso por posición entre 5% y 30%.
+- Horizonte del backtest: 10 años (2016-01-01 a 2025-12-31). Para FIBRAs que 
+  no existían al inicio (NEXT25, FMX23, etc.), excluirlas de las estrategias 
+  hasta que tengan datos.
+- Rebalanceo: trimestral, al cierre del último día hábil del trimestre.
+- Reinversión de distribuciones: 100% (DRIP) en la misma FIBRA que pagó.
+- Costos: comisión 0.25% + IVA por operación; slippage adicional de 0.10% 
+  para FIBRAs con bursatilidad baja (FPLUS16, EDUCA18, STORAGE18, FSITES20, 
+  FMX23).
+- Impuestos: persona física, ganancia de capital exenta. Distribuciones por 
+  reembolso de capital sin retención; resultado fiscal según régimen vigente. 
+  Modela las distribuciones netas si tienes el dato; si no, asume brutas y 
+  documéntalo.
+
+DATOS QUE NECESITO
+1. Precios diarios y distribuciones por FIBRA. Sugerencia inicial: yfinance 
+   con ticker.MX (FUNO11.MX, etc.). Pero antes de comprometerte con yfinance, 
+   verifica:
+   - ¿Cubre las 15 FIBRAs?
+   - ¿Las distribuciones están completas y bien fechadas?
+   - ¿Hay gaps grandes en alguna serie?
+   Si yfinance no es suficiente, evalúa alternativas: pandas-datareader, 
+   investpy, scrapeo de FibrasMX (https://fibrasmx.com), o descarga directa 
+   de la BMV. Documenta tu elección y por qué.
+2. Métricas trimestrales fundamentales (ocupación, LTV, payout ratio, NAV/CBFI) 
+   por FIBRA. Estas no están en yfinance. Opciones:
+   - Scrapeo de FibrasMX (preferida si funciona).
+   - Ingesta manual desde reportes trimestrales (te dejo un CSV plantilla si 
+     hace falta).
+   Si no logras conseguir las cuatro métricas, las estrategias E3-E5, E10 no 
+   se podrán correr completas. En ese caso, simplifica: usa solo las métricas 
+   disponibles y deja documentadas las que faltan.
+
+LAS 11 ESTRATEGIAS
+
+E0 - Aleatorio (Benchmark): cada trimestre sortea 5 FIBRAs y pesos aleatorios 
+en [5%, 30%] que sumen 100%. Usa una semilla fija para reproducibilidad.
+
+E1 - Equiponderada: 5 FIBRAs más líquidas (FUNO11, FIBRAPL14, FMTY14, 
+DANHOS13, FSHOP13), 20% cada una, rebalanceo trimestral.
+
+E2 - Yield Máximo: top-5 por dividend yield TTM. Excluye yield > 12%. Pesos 
+proporcionales al yield, normalizados a [5%, 30%].
+
+E3 - Calidad Operativa: filtro ocupación >= 95% Y LTV <= 30%. Equiponderada 
+entre las que pasen. Si no hay 5, completa con las siguientes mejores por 
+score combinado.
+
+E4 - Score 5 reglas: top-5 por score 0-15 calculado como suma de:
+  - Ocupación: >=95% (3pt) / 90-95% (2) / 85-90% (1) / <85% (0)
+  - LTV: <=30% (3) / 30-40% (2) / 40-45% (1) / >45% (0)
+  - Payout: <65% (3) / 65-85% (2) / 85-95% (1) / >95% (0)
+  - Yield: 6-10% (3) / 5-6% o 10-12% (2) / fuera (0)
+  - P/NAV: <1.0 (3) / 1.0-1.2 (2) / 1.2-1.5 (1) / >1.5 (0)
+Pesos proporcionales al score. Sustituye una FIBRA cuando su score cae a 
+< 8/15 por dos trimestres seguidos.
+
+E5 - Value (Descuento sobre NAV): top-5 con menor P/NAV, con piso ocupación 
+>= 88%. Pesos inverso al P/NAV. Vende cuando P/NAV >= 1.10.
+
+E6 - Momentum 12-1: top-5 por retorno total de los últimos 12 meses excluyendo 
+el último (12-1). Equiponderada. Recalcula cada trimestre.
+
+E7 - Mean Reversion: bottom-5 por retorno 12 meses, con piso de calidad 
+(ocupación >= 88%, LTV <= 45%). Equiponderada. Vende cuando una posición 
+acumula +20% desde la entrada.
+
+E8 - Diversificación Sectorial: 1 FIBRA por sector (Industrial, Comercial, 
+Oficinas/Mixto, Hotelero, Otros) eligiendo la de mejor score sectorial. 20% 
+por sector. Si un sector queda vacío, redistribuye su peso entre los demás.
+
+E9 - Risk Parity: top-7 por liquidez. Pesos inversamente proporcionales a la 
+volatilidad de los retornos diarios de los últimos 60 días, normalizados a 
+[5%, 30%].
+
+E10 - Quality + Value: filtro 1 (ocupación >= 90%, LTV <= 40%, payout < 85%). 
+De las que pasen, top-5 por mayor descuento sobre NAV. Pesos = 
+score_calidad * descuento, normalizados. Vende si pierde el filtro 1 o si 
+P/NAV > 1.15.
+
+ENTREGABLES
+1. Estructura del proyecto:
+   - data/        (CSV/Parquet con precios, distribuciones, métricas)
+   - src/         (código modular)
+       - data_loader.py    (carga y normaliza fuentes)
+       - strategies.py     (cada estrategia como una función o clase)
+       - backtest.py       (motor que aplica una estrategia y devuelve serie 
+                            de valor del portafolio + métricas)
+       - metrics.py        (CAGR, vol anualizada, Sharpe, Calmar, max DD, 
+                            yield realizado, consistencia)
+       - main.py           (corre las 11 estrategias y compara)
+   - notebooks/   (análisis exploratorio)
+   - results/     (outputs: CSVs y gráficas)
+   - README.md
+2. Tabla comparativa final (CSV + impresa en consola) con: estrategia, CAGR, 
+   vol anualizada, Sharpe, Calmar, max DD, yield medio, consistencia, valor 
+   final del portafolio.
+3. Gráficas:
+   - Equity curve de las 11 estrategias en el mismo plot.
+   - Drawdown chart.
+   - Distribuciones acumuladas pagadas por estrategia.
+   - Heatmap de retornos anuales por estrategia.
+4. Análisis por estrategia: cuál ganó, cuál tuvo mejor Sharpe, cuál sobrevivió 
+   mejor un drawdown. Texto corto, no me hagas ensayos.
+
+CRITERIOS DE EVALUACIÓN ENTRE ESTRATEGIAS
+Ordena las estrategias por Sharpe Ratio. Si dos están empatadas (diferencia 
+< 0.05), desempata por Calmar. Si siguen empatadas, por consistencia.
+
+ANTES DE EMPEZAR
+1. Verifica que tienes Python 3.10+, pandas, numpy, yfinance, matplotlib 
+   (o plotly), scipy. Si falta algo, instala.
+2. Haz un sanity check de los datos antes de correr backtest: imprime 
+   coverage por FIBRA (fechas mín/máx, % de datos faltantes).
+3. Si una estrategia no se puede correr por falta de datos, ponla en NaN en 
+   la tabla final y dilo, no inventes resultados.
+
+Empieza por el data_loader y un EDA corto. Cuando los datos estén limpios, 
+implementa el motor de backtest con E1 (Equiponderada) como prueba. Una vez 
+que E1 dé resultados razonables, agrega las demás.
+
+Importante: cualquier supuesto que tomes (cómo manejas distribuciones a 
+mediados de trimestre, cómo defines "5 más líquidas", cómo asignas sectores 
+a cada FIBRA), déjalo documentado en el README.

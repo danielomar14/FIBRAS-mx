@@ -118,7 +118,10 @@ def evaluate_period(
     fids = [GENE_ID_MAP[g] for g in ind.genes]
     available_fids = [f for f in fids if f in feature_matrix.columns]
     if not available_fids:
-        return {"sharpe": -np.inf, "cagr": np.nan, "max_dd": np.nan, "returns": [], "equity": pd.Series(dtype=float)}
+        return {
+            "sharpe": np.nan, "cagr": np.nan, "max_dd": np.nan,
+            "returns": [], "equity": pd.Series(dtype=float), "n_periods": 0,
+        }
 
     price_idx = prices_wide.index
     rebalance_dates = _rebalance_dates(price_idx, start, end)
@@ -142,21 +145,31 @@ def evaluate_period(
             common  = ep.index.intersection(xp.index)
             if len(common) == 0: continue
             ret = float((xp.loc[common] / ep.loc[common] - 1).mean())
-            records.append({"date": entry_date, "return": ret})
+            records.append({"date": entry_date, "return": ret, "tickers": list(common)})
         except Exception:
             continue
 
     if not records:
-        return {"sharpe": -np.inf, "cagr": np.nan, "max_dd": np.nan, "returns": [], "equity": pd.Series(dtype=float)}
+        return {
+            "sharpe": np.nan, "cagr": np.nan, "max_dd": np.nan,
+            "returns": [], "equity": pd.Series(dtype=float), "n_periods": 0,
+        }
 
     df = pd.DataFrame(records).set_index("date")
     rets = df["return"].tolist()
+    n = len(rets)
     equity = (1 + pd.Series(rets)).cumprod()
     arr = np.array(rets)
-    sharpe = float(arr.mean() / arr.std(ddof=1) * np.sqrt(4)) if arr.std(ddof=1) > 0 else 0.0
-    n_years = len(rets) / 4
+    std = arr.std(ddof=1) if n >= 2 else np.nan
+    sharpe = float(arr.mean() / std * np.sqrt(4)) if (std and std > 0) else np.nan
+    n_years = n / 4
     cagr = float(equity.iloc[-1] ** (1 / max(n_years, 0.25)) - 1)
     rolling_max = equity.cummax()
     max_dd = float(((equity - rolling_max) / rolling_max).min())
 
-    return {"sharpe": sharpe, "cagr": cagr, "max_dd": max_dd, "returns": rets, "equity": equity}
+    return {
+        "sharpe": sharpe, "cagr": cagr, "max_dd": max_dd,
+        "returns": rets, "equity": equity, "n_periods": n,
+        "returns_dated": df["return"],  # pd.Series indexed by entry_date
+        "details": df,                  # DataFrame con columnas return + tickers
+    }

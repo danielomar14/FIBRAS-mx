@@ -16,7 +16,6 @@ import sys
 import warnings
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
@@ -114,55 +113,41 @@ def _backtest_to_monthly(df: pd.DataFrame) -> pd.Series:
     return df["portfolio_value"].resample("ME").last().ffill()
 
 
-def _rets_from_equity(equity: pd.Series) -> list[float]:
-    """Extrae retornos periodo a periodo de una serie de equity acumulada."""
-    if equity is None or len(equity) == 0:
-        return []
-    e = equity.reset_index(drop=True)
-    rets = [float(e.iloc[0] - 1)]
-    for i in range(1, len(e)):
-        if e.iloc[i - 1] != 0:
-            rets.append(float(e.iloc[i] / e.iloc[i - 1] - 1))
-    return rets
 
-
-def _simulate_from_quarterly(
-    quarterly_returns: list[float],
-    start_date: str,
-    start_portfolio: float,
+def _simulate_from_dated_rets(
+    rets_dated: "pd.Series",
     all_months: list[pd.Timestamp],
 ) -> pd.Series:
     """
-    Simula valor mensual del portfolio aplicando retornos trimestrales.
-    start_date : cuándo empieza esta curva (puede ser posterior al inicio global)
-    start_portfolio: valor del portfolio al start_date
+    Simula portfolio mensual desde START (2021) usando retornos trimestrales
+    con fechas reales (indexed by entry_date).
+    Mismo capital inicial y aportaciones que las demás estrategias.
     """
-    if not quarterly_returns:
+    if rets_dated is None or len(rets_dated) == 0:
         return pd.Series(dtype=float)
 
-    # Fechas de rebalanceo trimestrales (ene, abr, jul, oct)
-    rebal_months = {(d.year, d.month)
-                    for d in pd.date_range(start=start_date, end=END, freq="QS-JAN")}
+    rets = rets_dated.sort_index()
+    rets = rets[rets.index >= pd.Timestamp(START)]
+    if len(rets) == 0:
+        return pd.Series(dtype=float)
 
-    portfolio = start_portfolio
-    ret_idx   = 0
-    prev_key  = None
-    series    = {}
+    # (year, month) → return  (entry month = mes en que se aplica el retorno)
+    ret_map: dict[tuple, float] = {}
+    for dt, r in rets.items():
+        ret_map[(dt.year, dt.month)] = r
 
-    for i, d in enumerate(all_months):
-        if d < pd.Timestamp(start_date):
+    portfolio = INITIAL_CAPITAL
+    series: dict = {}
+    start_ts = pd.Timestamp(START)
+
+    for d in all_months:
+        if d < start_ts:
             continue
-        key = (d.year, d.month)
-        if key in rebal_months and key != prev_key and ret_idx < len(quarterly_returns):
-            portfolio *= (1 + quarterly_returns[ret_idx])
-            ret_idx   += 1
-            prev_key   = key
-        # Apply CETES rate to cash held between rebalances (approximate)
-        annual_r  = _CETES_MONTHLY.get(key, 9.0) / 100
-        cash_ret  = (1 + annual_r) ** (1 / 12) - 1
-        # Contribution at start of month
-        if d > pd.Timestamp(start_date):
+        if d > start_ts:
             portfolio += MONTHLY_CONTRIB
+        key = (d.year, d.month)
+        if key in ret_map:
+            portfolio *= (1 + ret_map[key])
         series[d] = portfolio
 
     return pd.Series(series)
@@ -238,7 +223,9 @@ if calcular or "resultados_computed" in st.session_state:
         best_er   = e_results[best_code]
 
     # ── ML mejor ──────────────────────────────────────────────────────────────
-    ml_equity_test, ml_name = None, None
+    ml_name = None
+    ml_rets_dated_is   = None  # pd.Series indexed by entry_date (2021-2023)
+    ml_rets_dated_test = None  # pd.Series indexed by entry_date (2024-2025)
     ml_path = ROOT / "results" / "ml_results.pkl"
     if ml_path.exists():
         try:
@@ -248,8 +235,9 @@ if calcular or "resultados_computed" in st.session_state:
                 ml_results,
                 key=lambda k: ml_results[k].get("sharpe_test", -math.inf),
             )
-            ml_name       = ml_best_code
-            ml_equity_test = ml_results[ml_best_code].get("equity_test")
+            ml_name            = ml_best_code
+            ml_rets_dated_is   = ml_results[ml_best_code].get("returns_dated_is")
+            ml_rets_dated_test = ml_results[ml_best_code].get("returns_dated_test")
         except Exception:
             pass
 
@@ -273,30 +261,34 @@ if calcular or "resultados_computed" in st.session_state:
     if best_er is not None:
         best_e_m = _backtest_to_monthly(best_er["df"])
 
-    # Capital invertido al inicio del OOS (para anclar ML y GA)
-    invested_at_oos = INITIAL_CAPITAL + MONTHLY_CONTRIB * len(
-        [d for d in all_months if d < pd.Timestamp(OOS_START)]
-    )
-
-    # ML: reconstruir retornos trimestrales del test y simular portfolio
+    # ML: concatenar retornos IS (2021-2023) + test (2024-2025) desde 2021
     ml_monthly = None
-    if ml_equity_test is not None and len(ml_equity_test) > 0:
-        ml_rets = _rets_from_equity(ml_equity_test)
-        ml_monthly = _simulate_from_quarterly(
-            ml_rets, OOS_START, invested_at_oos, all_months
-        )
+    if ml_rets_dated_is is not None or ml_rets_dated_test is not None:
+        parts = []
+        if ml_rets_dated_is is not None and len(ml_rets_dated_is) > 0:
+            parts.append(ml_rets_dated_is)
+        if ml_rets_dated_test is not None and len(ml_rets_dated_test) > 0:
+            parts.append(ml_rets_dated_test)
+        if parts:
+            ml_rets_combined = pd.concat(parts).sort_index()
+            ml_monthly = _simulate_from_dated_rets(ml_rets_combined, all_months)
 
-    # GA: usar returns de test + val
+    # GA: usar full_metrics (2021-2026) para comparativa desde el mismo punto
     ga_monthly = None
     if ga_result is not None:
-        ga_rets = (
-            list(ga_result.test_metrics.get("returns", []))
-            + list(ga_result.val_metrics.get("returns", []))
-        )
-        if ga_rets:
-            ga_monthly = _simulate_from_quarterly(
-                ga_rets, OOS_START, invested_at_oos, all_months
-            )
+        ga_rets_dated = None
+        full_met = getattr(ga_result, "full_metrics", {})
+        if full_met:
+            ga_rets_dated = full_met.get("returns_dated")
+        if ga_rets_dated is None or len(ga_rets_dated) == 0:
+            # fallback: concatenar test + val con fechas aproximadas
+            test_rets = ga_result.test_metrics.get("returns_dated")
+            val_rets  = ga_result.val_metrics.get("returns_dated")
+            parts = [r for r in [test_rets, val_rets] if r is not None and len(r) > 0]
+            if parts:
+                ga_rets_dated = pd.concat(parts).sort_index()
+        if ga_rets_dated is not None and len(ga_rets_dated) > 0:
+            ga_monthly = _simulate_from_dated_rets(ga_rets_dated, all_months)
 
     # ── Gráfica comparativa ───────────────────────────────────────────────────
     st.subheader("Comparativa de portafolios (450 k MXN + 10 k/mes)")
@@ -340,9 +332,9 @@ if calcular or "resultados_computed" in st.session_state:
     if best_code:
         _add(best_e_m, f"Mejor E0-E13: {best_code} — {best_er['nombre']}", "#00CC96", width=2.5)
     if ml_monthly is not None:
-        _add(ml_monthly, f"ML mejor: {ml_name} (OOS)", "#FFA15A", dash="longdash", width=2)
+        _add(ml_monthly, f"ML mejor: {ml_name}", "#FFA15A", dash="longdash", width=2)
     if ga_monthly is not None:
-        _add(ga_monthly, "GA mejor (OOS)", "#EF553B", dash="longdash", width=2)
+        _add(ga_monthly, "GA mejor", "#EF553B", dash="longdash", width=2)
 
     fig.update_layout(
         height=520,
@@ -354,9 +346,10 @@ if calcular or "resultados_computed" in st.session_state:
     st.plotly_chart(fig, use_container_width=True)
 
     st.caption(
-        "ML y GA se muestran a partir de 2024 (período fuera de muestra) "
-        "con el capital acumulado hasta esa fecha como base. "
-        "El área verde es el único período donde ML/GA no vieron los datos."
+        "Todas las estrategias parten del mismo capital inicial (450 k MXN + 10 k/mes desde 2021). "
+        "Para ML y GA, el período 2021-2023 es **in-sample** (el modelo lo vio durante entrenamiento); "
+        "2024 en adelante es **out-of-sample** genuino. "
+        "Las E0-E13 se muestran aquí también en modo retrospectivo desde 2021."
     )
 
     # ── Métricas financieras ──────────────────────────────────────────────────
@@ -387,10 +380,10 @@ if calcular or "resultados_computed" in st.session_state:
         r = _row(f"Mejor E0-E13: {best_code}", best_e_m, "🟢")
         if r: rows.append(r)
     if ml_monthly is not None:
-        r = _row(f"ML mejor: {ml_name} (OOS desde 2024)", ml_monthly, "🟠")
+        r = _row(f"ML mejor: {ml_name}", ml_monthly, "🟠")
         if r: rows.append(r)
     if ga_monthly is not None:
-        r = _row("GA mejor (OOS desde 2024)", ga_monthly, "🔴")
+        r = _row("GA mejor", ga_monthly, "🔴")
         if r: rows.append(r)
 
     if rows:

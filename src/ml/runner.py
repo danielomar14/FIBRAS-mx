@@ -132,6 +132,15 @@ def run_all_models(
             fm_test_aligned, labels_test, prices_wide, model, test_dates, train_dates, top_k
         )
 
+        # In-sample evaluation on 2021-2023 for the results comparison page.
+        # Uses final model (trained on all of 2017-2023) applied to 2021-2023 dates.
+        IS_START = pd.Timestamp("2021-01-01")
+        is_dates = [d for d in train_dates if d >= IS_START]
+        fm_is_aligned = fm_train.reindex(columns=X_tr.columns).fillna(0)
+        is_res = evaluate_on_period(
+            fm_is_aligned, labels_train, prices_wide, model, is_dates, train_dates, top_k
+        )
+
         fi = feature_importance(model)
         if fi:
             fi = {int(k): float(v) for k, v in fi.items()}
@@ -144,6 +153,12 @@ def run_all_models(
             "max_dd_test":        test_res.get("max_dd", np.nan),
             "equity_train":       (1 + pd.Series(train_rets)).cumprod() if train_rets else pd.Series(dtype=float),
             "equity_test":        test_res.get("equity", pd.Series(dtype=float)),
+            # Dated returns for the full-comparison chart (2021 → now)
+            "returns_dated_is":   is_res.get("returns_dated",  pd.Series(dtype=float)),
+            "returns_dated_test": test_res.get("returns_dated", pd.Series(dtype=float)),
+            # Full details (tickers per rebalancing date) for per-FIBRA CSV export
+            "details_is":         is_res.get("details",   pd.DataFrame()),
+            "details_test":       test_res.get("details", pd.DataFrame()),
             "feature_importance": fi,
             "model":              model,
         }

@@ -163,10 +163,11 @@ def evaluate_on_period(
     max_dd = float(((equity - rolling_max) / rolling_max).min())
 
     return {
-        "returns":    rets,
-        "sharpe":     sharpe_from_returns(rets),
-        "cagr":       cagr,
-        "max_dd":     max_dd,
-        "equity":     equity,
-        "details":    df,
+        "returns":        rets,
+        "returns_dated":  df["return"],   # pd.Series indexed by entry_date
+        "sharpe":         sharpe_from_returns(rets),
+        "cagr":           cagr,
+        "max_dd":         max_dd,
+        "equity":         equity,
+        "details":        df,
     }

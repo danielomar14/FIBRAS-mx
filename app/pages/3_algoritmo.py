@@ -194,13 +194,25 @@ with sec_ga:
     ga_progress = st.empty()
     ga_status   = st.empty()
 
+    # Warn if params changed since last run
+    stored_params = st.session_state.get("ga_run_params", {})
+    if stored_params and not run_ga_btn:
+        if (stored_params.get("gens") != ga_gens
+                or stored_params.get("pop") != ga_pop
+                or stored_params.get("seed") != int(ga_seed)):
+            st.warning(
+                f"Parámetros cambiados desde el último run "
+                f"(gen={stored_params['gens']}, pop={stored_params['pop']}, "
+                f"seed={stored_params['seed']}). "
+                "Presiona **Correr** para actualizar."
+            )
+
     if run_ga_btn or ("ga_result" in st.session_state):
         if run_ga_btn:
             from src.genetic.ga import run_ga
 
             progress_bar = ga_progress.progress(0)
             status_text  = ga_status.empty()
-            history_live: list[dict] = []
 
             def _cb(gen, best_fit, mean_fit, best_ind):
                 pct = int(gen / ga_gens * 100)
@@ -209,14 +221,13 @@ with sec_ga:
                     f"Gen {gen}/{ga_gens}  |  Best Sharpe: {best_fit:.3f}  |  "
                     f"Mean: {mean_fit:.3f}  |  {best_ind.summary()}"
                 )
-                history_live.append({"gen": gen, "best": best_fit, "mean": mean_fit})
 
             with st.spinner("Ejecutando GA..."):
                 result = run_ga(
                     n_generations=ga_gens,
                     population_size=ga_pop,
                     seed=int(ga_seed),
-                    cache=ga_cache,
+                    cache=False,          # siempre corre fresco al presionar el botón
                     progress_callback=_cb,
                 )
             progress_bar.empty()
@@ -224,6 +235,9 @@ with sec_ga:
             ga_progress.empty()
             ga_status.empty()
             st.session_state["ga_result"] = result
+            st.session_state["ga_run_params"] = {
+                "gens": ga_gens, "pop": ga_pop, "seed": int(ga_seed),
+            }
 
         result = st.session_state.get("ga_result")
         if result is None:
@@ -237,127 +251,115 @@ with sec_ga:
                 "Tab 4 — Frecuencia variables",
             ])
 
-            # ── Tab 0: Animación de población ─────────────────────────────
+            # ── Tab 0: Evolución de población (slider interactivo) ────────
             with tab_anim:
+                import math as _math
                 history_populations = getattr(result, "history_populations", [])
                 if not history_populations:
-                    st.info("Re-ejecuta el GA (sin cache) para ver la animación por generación.")
+                    st.warning(
+                        "No hay datos de evolución por generación en este resultado. "
+                        "Reinicia Streamlit (`Ctrl+C` → `streamlit run app/main.py`) "
+                        "y corre el GA de nuevo para ver esta gráfica."
+                    )
                 else:
-                    import math as _math
-
-                    accum_x: list[float] = []
-                    accum_y: list[int]   = []
-                    max_xs:  list[float] = []
-                    mean_xs: list[float] = []
-                    gen_ys:  list[int]   = []
-                    frames_anim = []
-
-                    all_valid = [f for pop in history_populations for f in pop
-                                 if not (_math.isinf(f) or _math.isnan(f))]
-                    x_min = min(all_valid) - 0.05 if all_valid else -1
-                    x_max = max(all_valid) + 0.05 if all_valid else 1
-
-                    for g_idx, pop_fits in enumerate(history_populations):
-                        gen = g_idx + 1
-                        valid = [f for f in pop_fits if not (_math.isinf(f) or _math.isnan(f))]
-                        accum_x.extend(valid)
-                        accum_y.extend([gen] * len(valid))
-                        max_xs.append(max(valid) if valid else 0)
-                        mean_xs.append(float(np.mean(valid)) if valid else 0)
-                        gen_ys.append(gen)
-
-                        frames_anim.append(go.Frame(
-                            data=[
-                                go.Scatter(
-                                    x=list(accum_x), y=list(accum_y),
-                                    mode="markers",
-                                    marker=dict(
-                                        size=9,
-                                        color=list(accum_y),
-                                        colorscale="Viridis",
-                                        showscale=True,
-                                        colorbar=dict(title="Gen"),
-                                        opacity=0.75,
-                                    ),
-                                    name="Individuos",
-                                ),
-                                go.Scatter(
-                                    x=list(max_xs), y=list(gen_ys),
-                                    mode="lines+markers",
-                                    line=dict(dash="dot", color="#00CC96", width=2),
-                                    marker=dict(size=5),
-                                    name="Máximo",
-                                ),
-                                go.Scatter(
-                                    x=list(mean_xs), y=list(gen_ys),
-                                    mode="lines+markers",
-                                    line=dict(dash="dot", color="#EF553B", width=2),
-                                    marker=dict(size=5),
-                                    name="Promedio",
-                                ),
-                            ],
-                            name=str(gen),
-                        ))
-
                     n_gens = len(history_populations)
-                    slider_steps = [
-                        dict(method="animate",
-                             args=[[str(g+1)], dict(mode="immediate",
-                                                    frame=dict(duration=300, redraw=True),
-                                                    transition=dict(duration=100))],
-                             label=str(g+1))
-                        for g in range(n_gens)
-                    ]
 
-                    fig_anim = go.Figure(
-                        data=frames_anim[0].data if frames_anim else [],
-                        layout=go.Layout(
-                            title="Evolución de la población GA — (X = Fitness, Y = Generación)",
-                            xaxis=dict(title="Fitness (Sharpe ajustado)", range=[x_min, x_max]),
-                            yaxis=dict(title="Generación", range=[0.5, n_gens + 0.5]),
-                            height=500,
-                            hovermode="closest",
-                            updatemenus=[dict(
-                                type="buttons",
-                                showactive=False,
-                                y=1.15, x=0, xanchor="left",
-                                buttons=[
-                                    dict(label="▶ Play", method="animate",
-                                         args=[None, dict(
-                                             frame=dict(duration=400, redraw=True),
-                                             fromcurrent=True,
-                                             transition=dict(duration=150),
-                                         )]),
-                                    dict(label="⏸ Pausa", method="animate",
-                                         args=[[None], dict(
-                                             frame=dict(duration=0, redraw=False),
-                                             mode="immediate",
-                                         )]),
-                                ],
-                            )],
-                            sliders=[dict(
-                                active=0,
-                                steps=slider_steps,
-                                x=0, y=0, len=1,
-                                currentvalue=dict(
-                                    prefix="Generación: ",
-                                    visible=True,
-                                    xanchor="center",
-                                ),
-                                transition=dict(duration=150),
-                            )],
+                    all_valid = [
+                        f for pop in history_populations for f in pop
+                        if not (_math.isinf(f) or _math.isnan(f))
+                    ]
+                    y_min = (min(all_valid) - 0.15) if all_valid else -1.0
+                    y_max = (max(all_valid) + 0.15) if all_valid else  1.0
+
+                    gen_sel = st.slider(
+                        "Generación", min_value=1, max_value=n_gens, value=n_gens,
+                        key="gen_sel_anim",
+                        help="Arrastra para ver cómo evoluciona la población",
+                    )
+
+                    accum_gen:   list[int]   = []
+                    accum_fit:   list[float] = []
+                    max_by_gen:  list[float] = []
+                    mean_by_gen: list[float] = []
+                    gen_xs:      list[int]   = []
+
+                    for g in range(gen_sel):
+                        pop = history_populations[g]
+                        valid = [f for f in pop
+                                 if not (_math.isinf(f) or _math.isnan(f))]
+                        accum_gen.extend([g + 1] * len(valid))
+                        accum_fit.extend(valid)
+                        max_by_gen.append(max(valid)             if valid else 0.0)
+                        mean_by_gen.append(float(np.mean(valid)) if valid else 0.0)
+                        gen_xs.append(g + 1)
+
+                    fig_anim = go.Figure()
+                    if accum_fit:
+                        fig_anim.add_trace(go.Scatter(
+                            x=accum_gen,
+                            y=accum_fit,
+                            mode="markers",
+                            marker=dict(
+                                size=10,
+                                color=accum_fit,
+                                colorscale="RdYlGn",
+                                cmin=y_min, cmax=y_max,
+                                showscale=True,
+                                colorbar=dict(title="Fitness", len=0.75, thickness=14),
+                                opacity=0.85,
+                                line=dict(width=0.5, color="white"),
+                            ),
+                            name="Individuos",
+                            hovertemplate="Gen %{x}<br>Fitness: %{y:.3f}<extra></extra>",
+                        ))
+                    fig_anim.add_trace(go.Scatter(
+                        x=gen_xs, y=max_by_gen,
+                        mode="lines+markers",
+                        line=dict(dash="dot", color="#00CC96", width=2.5),
+                        marker=dict(size=7, symbol="diamond"),
+                        name="Máximo",
+                    ))
+                    fig_anim.add_trace(go.Scatter(
+                        x=gen_xs, y=mean_by_gen,
+                        mode="lines+markers",
+                        line=dict(dash="dot", color="#EF553B", width=2.5),
+                        marker=dict(size=7, symbol="circle"),
+                        name="Promedio",
+                    ))
+                    fig_anim.update_layout(
+                        title=f"Evolución GA — Generaciones 1 a {gen_sel} de {n_gens}",
+                        xaxis=dict(
+                            title="Generación",
+                            range=[0.5, n_gens + 0.5],
+                            dtick=1, tickmode="linear",
                         ),
-                        frames=frames_anim,
+                        yaxis=dict(
+                            title="Fitness (Sharpe ajustado)",
+                            range=[y_min, y_max],
+                        ),
+                        height=480,
+                        hovermode="closest",
+                        margin=dict(t=60, b=30, l=60, r=80),
+                        legend=dict(
+                            orientation="h", y=1.07, x=0.5, xanchor="center",
+                        ),
                     )
                     st.plotly_chart(fig_anim, use_container_width=True)
                     st.caption(
-                        "Cada punto es un individuo de la población. "
-                        "Las líneas punteadas muestran el máximo y el promedio de fitness "
-                        "acumulados hasta esa generación."
+                        "Arrastra el slider para ver la evolución generación a generación. "
+                        "Verde = fitness alto, rojo = bajo. "
+                        f"**{n_gens}** generaciones en total."
                     )
 
             # ── Tab 1: Convergencia ───────────────────────────────────────
             with tab_conv:
+                if stored_params:
+                    st.caption(
+                        f"Resultado del run: **{stored_params.get('gens','?')} gen** · "
+                        f"**{stored_params.get('pop','?')} individuos** · "
+                        f"semilla {stored_params.get('seed','?')}. "
+                        "Cambia los parámetros y presiona **Correr** para actualizar."
+                    )
                 fig_conv = go.Figure()
                 gens = list(range(1, len(result.history_best) + 1))
                 fig_conv.add_trace(go.Scatter(
@@ -408,12 +410,17 @@ with sec_ga:
                     ("Validation (2026)", result.val_metrics),
                 ]):
                     with col:
-                        st.markdown(f"**{label}**")
-                        st.metric("Sharpe", f"{met.get('sharpe', np.nan):.2f}")
+                        n_per = met.get("n_periods", "?")
+                        st.markdown(f"**{label}** — {n_per} trimestres")
+                        if isinstance(n_per, int) and n_per < 4:
+                            st.warning(f"Solo {n_per} período(s) — métricas poco confiables.")
+                        sharpe = met.get("sharpe", np.nan)
+                        st.metric("Sharpe",
+                                  f"{sharpe:.2f}" if (sharpe is not None and not np.isnan(sharpe)) else "N/A")
                         cagr = met.get("cagr", np.nan)
-                        st.metric("CAGR",   f"{cagr:.1%}" if not np.isnan(cagr) else "N/A")
+                        st.metric("CAGR",   f"{cagr:.1%}"  if (cagr is not None and not np.isnan(cagr))   else "N/A")
                         mdd = met.get("max_dd", np.nan)
-                        st.metric("MaxDD",  f"{mdd:.1%}" if not np.isnan(mdd) else "N/A")
+                        st.metric("MaxDD",  f"{mdd:.1%}"   if (mdd is not None  and not np.isnan(mdd))    else "N/A")
 
             # ── Tab 3: Equity curve ────────────────────────────────────────
             with tab_eq:
